@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>节奏天国风 · 音乐小游戏</title>
+<link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body>
+<div id="app">
+  <canvas id="game-canvas" width="960" height="540"></canvas>
+
+  <!-- 标题画面 -->
+  <div id="screen-title" class="screen">
+    <div class="panel">
+      <h1 class="game-title">节奏天国风</h1>
+      <p class="subtitle">RHYTHM HEAVEN-LIKE MINI GAMES</p>
+      <p class="hint">跟着音乐节拍，在正确的瞬间按键！</p>
+      <button id="btn-start" class="btn btn-big">开始游戏</button>
+      <p class="hint dim">（首次点击会开启声音，请调高音量 🔊）</p>
+    </div>
+  </div>
+
+  <!-- 选关画面 -->
+  <div id="screen-select" class="screen hidden">
+    <div class="panel">
+      <h2>选择关卡</h2>
+      <div id="level-list"></div>
+    </div>
+  </div>
+
+  <!-- 结算画面 -->
+  <div id="screen-result" class="screen hidden">
+    <div class="panel">
+      <div id="result-rank">S</div>
+      <div id="result-comment">太出色了！</div>
+      <div id="result-stats"></div>
+      <div class="btn-row">
+        <button id="btn-retry" class="btn">再来一次</button>
+        <button id="btn-back" class="btn">返回选关</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="hud-tip" class="hidden">空格 / 点击 = 击打 &nbsp;·&nbsp; Esc = 退出</div>
+</div>
+
+<script src="js/audio.js"></script>
+<script src="js/conductor.js"></script>
+<script src="js/animals.js"></script>
+<script src="js/levels.js"></script>
+<script src="js/levels2.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
