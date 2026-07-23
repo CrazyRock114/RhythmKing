@@ -525,6 +525,7 @@ const LevelShowtime = {
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(prot);
+    if (squash > 0) ctx.scale(1 + squash * 0.5, 1 - squash); // 铃响后压板蓄力
     Animals.bird(ctx, 0, 0, 28, {
       color: '#33507e',
       mood,
@@ -532,12 +533,8 @@ const LevelShowtime = {
       beakOpen: phase === 'podium' ? 0.6 : 0,
       wingFlap: flap
     });
-    if (squash > 0) {
-      ctx.fillStyle = 'rgba(51,80,126,0.35)';
-      ctx.beginPath(); ctx.ellipse(0, 26, 30, 6, 0, 0, Math.PI * 2); ctx.fill();
-    }
     ctx.restore();
-    // 蓄力压扁效果（用 squash 参数重画一次太费，改为板上影子提示）
+    // 蓄力时的板上影子
     if (squash > 0) {
       ctx.fillStyle = 'rgba(0,0,0,0.15)';
       ctx.beginPath(); ctx.ellipse(px, this.PLANK_Y + 26, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
