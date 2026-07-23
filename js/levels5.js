@@ -4,6 +4,9 @@
  *   第 17 关 · 老鼠冲刺（Rat Race）：「预备」按住蓄力，哨声松开冲刺（长按）
  *   第 18 关 · DJ 学校（DJ School）：按住搓碟停音乐，「YO!」松开放回（长按）
  * 关卡接口与 levels.js 相同；长按音符额外实现 onPress / onRelease。
+ * 三模式：easy=原谱（静态值）；normal=setup 提供 bpm×1.1 与更长谱面 + 新花样；
+ * hard=bpm 更高 + mulberry32(Date.now()) 种子随机谱面（每次不同）。
+ * 结构性数据统一在 buildChart(mode) 生成后存入 this._cur，scheduleStep/draw 读 _cur。
  */
 'use strict';
 
@@ -12,6 +15,7 @@
  * 咒语 3 个音节 pi-ko-pon，咒停瞬间花开——按键！
  * 慢咒：音节间隔 1 拍（花在 c+3）；快咒：间隔半拍（花在 c+1.5）。
  * 间隔本身即预告：保持音节的速度「脑内续一拍」就是开花时机。
+ * 三模式：normal 加入特慢咒 trance（间隔 2 拍，花在 c+6）；hard 种子随机咒序。
  * ============================================================== */
 const LevelMahou = {
   id: 'mahou',
@@ -21,20 +25,58 @@ const LevelMahou = {
   bpm: 100,
   totalBeats: 46,
 
-  // [咒语起始拍, 类型]
+  // [咒语起始拍, 类型]（easy：与初版完全一致）
   commands: [
     [4, 'slow'], [8, 'slow'], [12, 'fast'], [15, 'slow'], [18, 'fast'], [21, 'fast'],
     [24, 'slow'], [28, 'fast'], [31, 'slow'], [34, 'fast'], [37, 'fast'], [40, 'fast']
+  ],
+  // normal：16 咒，加入特慢咒 trance（音节间隔 2 拍，花在 c+6）
+  normalCommands: [
+    [4, 'slow'], [8, 'fast'], [11, 'slow'], [15, 'trance'], [22, 'fast'], [25, 'slow'],
+    [29, 'fast'], [32, 'trance'], [39, 'slow'], [43, 'fast'], [46, 'slow'], [50, 'fast'],
+    [53, 'trance'], [60, 'slow'], [64, 'fast'], [67, 'fast']
   ],
   SYL: ['pi', 'ko', 'pon'],
   SYL_FREQ: [659, 740, 831],
   FLOWER_COLORS: ['#ff8fb3', '#ffd94d', '#b39dff', '#7de3a8', '#ff9a3d', '#8be9fd'],
 
-  ivlOf(kind) { return kind === 'slow' ? 1 : 0.5; },
-  bloomBeat(c, kind) { return c + (kind === 'slow' ? 3 : 1.5); },
+  // 类型 → [音节间隔拍数, 咒停→开花拍数]
+  KINDS: { slow: [1, 3], fast: [0.5, 1.5], trance: [2, 6] },
+  ivlOf(kind) { return this.KINDS[kind][0]; },
+  bloomBeat(c, kind) { return c + this.KINDS[kind][1]; },
 
-  buildChart() {
-    return this.commands.map(([c, kind], i) => ({
+  // 三模式：easy 用静态值；normal 110bpm/73 拍；hard 112bpm（长度按生成谱面再收紧）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 110, totalBeats: 73 };
+    if (mode === 'hard') return { bpm: 112, totalBeats: 180 };
+    return null;
+  },
+
+  buildChart(mode) {
+    let commands;
+    if (mode === 'normal') {
+      commands = this.normalCommands;
+    } else if (mode === 'hard') {
+      // 种子随机：18 咒；slow/fast/trance 随机序列 + 随机间隙（1~2 拍）+ 随机休止
+      const rnd = mulberry32(Date.now() % 100000);
+      const bag = ['fast', 'slow', 'fast', 'slow', 'trance']; // 40% / 40% / 20%
+      commands = [];
+      let c = 4;
+      for (let i = 0; i < 18; i++) {
+        const kind = bag[Math.floor(rnd() * bag.length)];
+        commands.push([c, kind]);
+        const gap = 1 + Math.floor(rnd() * 3) * 0.5;                 // 间隙 1 / 1.5 / 2
+        const rest = rnd() < 0.22 ? 1 + Math.floor(rnd() * 2) * 0.5 : 0; // 随机休止 1 / 1.5
+        c += this.KINDS[kind][1] + gap + rest;
+      }
+      // 谱面长度每次不同：按生成结果收紧结束拍（Game.start 在调度启动前调用本函数）
+      const [lc, lk] = commands[commands.length - 1];
+      Game.totalBeats = this.bloomBeat(lc, lk) + 2;
+    } else {
+      commands = this.commands; // easy：现状
+    }
+    this._cur = { commands };
+    return commands.map(([c, kind], i) => ({
       beat: this.bloomBeat(c, kind), cmd: c, kind, idx: i
     }));
   },
@@ -61,8 +103,8 @@ const LevelMahou = {
       // 预备拍（前 4 拍滴答）
       if (beat < 4) AudioEngine.blok(t, beat === 3 ? 1320 : 880);
     }
-    // 咒语音节：pi-ko-pon（间隔 = 速度：慢 1 拍 / 快半拍）
-    for (const [c, kind] of this.commands) {
+    // 咒语音节：pi-ko-pon（间隔 = 速度：慢 1 拍 / 快半拍 / trance 2 拍）
+    for (const [c, kind] of this._cur.commands) {
       const ivl = this.ivlOf(kind);
       for (let i = 0; i < 3; i++) {
         if (c + i * ivl === beat) AudioEngine.blok(t, this.SYL_FREQ[i]);
@@ -78,7 +120,7 @@ const LevelMahou = {
       game.mahou.bloomT = st;
       note.bloomT = st;
       AudioEngine.sparkle(AudioEngine.now()); // 花开！
-      const [fx, fy] = this.flowerPos(note.idx);
+      const [fx, fy] = this.flowerPos(note.idx, game.chart.length);
       game.burst(fx, fy - 36, this.FLOWER_COLORS[note.idx % 6], 18);
     }
   },
@@ -87,9 +129,11 @@ const LevelMahou = {
     game.mahou.sadT = Conductor.songTime();
   },
 
-  // 花坛位置：上排 6 朵 + 下排 6 朵
-  flowerPos(i) {
-    return [400 + (i % 6) * 104, i < 6 ? 448 : 500];
+  // 花坛位置：两排均分（easy 12 朵 = 上 6 + 下 6；normal/hard 更多时收窄间距）
+  flowerPos(i, total) {
+    const perRow = Math.ceil((total || 12) / 2);
+    const dx = perRow > 6 ? 520 / (perRow - 1) : 104;
+    return [400 + (i % perRow) * dx, i < perRow ? 448 : 500];
   },
 
   // 四角小星星（魔杖尖 / 装饰用）
@@ -202,13 +246,13 @@ const LevelMahou = {
 
     // 当前进行中的咒语（含即将开花的瞬间）
     let active = null;
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of this._cur.commands) {
       const bb = this.bloomBeat(c, kind);
       if (beat >= c - 0.02 && beat < bb + 0.25) { active = { c, kind, bb }; break; }
     }
     // 音节发声时刻 → 杖尖闪光
     let wandGlow = 0;
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of this._cur.commands) {
       const ivl = this.ivlOf(kind);
       for (let i = 0; i < 3; i++) {
         const sb = c + i * ivl;
@@ -218,7 +262,7 @@ const LevelMahou = {
 
     // 花园（先上排后下排，idx 顺序即绘制顺序）
     for (const n of game.chart) {
-      const [fx, fy] = this.flowerPos(n.idx);
+      const [fx, fy] = this.flowerPos(n.idx, game.chart.length);
       const color = this.FLOWER_COLORS[n.idx % 6];
       let open = 0.06, wilt = false, sway = Math.sin(st * 1.6 + n.idx) * 0.04;
       if (n.state === 'miss') {
@@ -305,8 +349,9 @@ const LevelMahou = {
 
 /* ================================================================
  * 第 16 关 · 企鹅跳台
- * 听铃声起跳：高音铃 = 1 拍后跳，低音铃 = 2 拍后跳。
+ * 听铃声起跳：高音铃 = 1 拍后跳，中音铃 = 1.5 拍后跳，低音铃 = 2 拍后跳。
  * 铃声在音符前 wait 拍响起，铃声音高本身就是「数几拍」的提示。
+ * 三模式：normal 加入 1.5 拍等待（中音铃 1568Hz）；hard 等待拍数种子随机。
  * ============================================================== */
 const LevelShowtime = {
   id: 'showtime',
@@ -319,14 +364,55 @@ const LevelShowtime = {
   PLANK_X: 366, PLANK_Y: 384, // 跳板端站位
   POD_X: 650, POD_Y: 312,     // 领奖台顶站位
 
-  // [起跳拍, 等待拍数]
+  // [起跳拍, 等待拍数]（easy：与初版完全一致）
   specs: [
     [4, 1], [6, 1], [8, 2], [11, 1], [13, 2], [16, 1], [18, 1],
     [20, 2], [23, 1], [25, 1], [27, 2], [30, 1], [32, 2], [35, 1]
   ],
+  // normal：18 跳，加入 1.5 拍等待（中音铃）
+  normalSpecs: [
+    [4, 1], [6.5, 1.5], [9.5, 1], [12, 2], [15.5, 1], [18, 1.5], [21, 1], [23.5, 2],
+    [27, 1], [29.5, 1.5], [32.5, 2], [36, 1], [38.5, 1], [41, 1.5], [44, 2], [47.5, 1],
+    [50, 1.5], [53, 1]
+  ],
 
-  buildChart() {
-    return this.specs.map(([b, w]) => ({ beat: b, wait: w }));
+  // 等待拍数 → 铃声音高（1.5 拍取中间值 1568）
+  freqOf(wait) { return wait === 1 ? 2093 : (wait === 1.5 ? 1568 : 1046); },
+
+  // 三模式：easy 用静态值；normal 108×1.1/62 拍；hard 120bpm（长度按生成谱面再收紧）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 108 * 1.1, totalBeats: 62 };
+    if (mode === 'hard') return { bpm: 120, totalBeats: 90 };
+    return null;
+  },
+
+  buildChart(mode) {
+    let specs;
+    if (mode === 'normal') {
+      specs = this.normalSpecs;
+    } else if (mode === 'hard') {
+      // 种子随机：18 跳；每 3 跳一组（1 / 1.5 / 2 各一）组内随机顺序，间隙 2.5~3.5 拍
+      const rnd = mulberry32(Date.now() % 100000);
+      specs = [];
+      let b = 4 + Math.floor(rnd() * 2) * 0.5;
+      for (let g = 0; g < 6; g++) {
+        const waits = [1, 1.5, 2];
+        for (let i = waits.length - 1; i > 0; i--) { // Fisher–Yates 洗牌
+          const j = Math.floor(rnd() * (i + 1));
+          const tmp = waits[i]; waits[i] = waits[j]; waits[j] = tmp;
+        }
+        for (const w of waits) {
+          specs.push([b, w]);
+          b += w + 1.5 + Math.floor(rnd() * 3) * 0.5;
+        }
+      }
+      // 谱面长度每次不同：按生成结果收紧结束拍（Game.start 在调度启动前调用本函数）
+      Game.totalBeats = specs[specs.length - 1][0] + 4;
+    } else {
+      specs = this.specs; // easy：现状
+    }
+    this._cur = { specs };
+    return specs.map(([b, w]) => ({ beat: b, wait: w }));
   },
 
   init(game) {
@@ -348,9 +434,9 @@ const LevelShowtime = {
       AudioEngine.hihat(t, false);
       AudioEngine.tone(t, [261.63, 329.63, 349.23, 329.63][Math.floor(beat) % 4], 0.1, 'square', 0.05);
     }
-    // 铃声预告：高音铃 = 1 拍后跳，低音铃 = 2 拍后跳
+    // 铃声预告：高音 = 1 拍 / 中音 = 1.5 拍 / 低音 = 2 拍后跳（与生成谱面严格对齐）
     for (const n of game.chart) {
-      if (n.beat - n.wait === beat) AudioEngine.bell(t, n.wait === 1 ? 2093 : 1046);
+      if (n.beat - n.wait === beat) AudioEngine.bell(t, this.freqOf(n.wait));
     }
   },
 
@@ -358,8 +444,11 @@ const LevelShowtime = {
     const st = Conductor.songTime();
     if (res === 'miss') {
       game.showtime.sadT = st;
+      note.missT = st;
     } else {
       game.showtime.jumpT = st;
+      note.hitT = st;
+      note.result = res; // 供庆祝/失落区分
       AudioEngine.sfxCue(AudioEngine.now()); // 起跳上升滑音
       game.burst(this.PLANK_X, this.PLANK_Y, '#ffffff', 8);
     }
@@ -495,53 +584,70 @@ const LevelShowtime = {
     ctx.quadraticCurveTo(312, 406 + sag, 394, 406 + sag * 0.9);
     ctx.stroke();
 
-    // 企鹅（蓝白色的鸟）：站位状态机（全部只读时钟推导）
-    let px = this.PLANK_X, py = this.PLANK_Y + sag * 0.8;
-    let prot = 0, squash = 0, flap = 0, mood = 'idle', phase = 'board';
-    const f = st - k.jumpT;
-    if (f >= 0 && f < 0.5) {
-      phase = 'fly';
-      const p = f / 0.5;
-      px = this.PLANK_X + (this.POD_X - this.PLANK_X) * p;
-      py = this.PLANK_Y + (this.POD_Y - this.PLANK_Y) * p - Math.sin(p * Math.PI) * 120;
-      prot = -0.25 + p * 0.5;
-      flap = 1;
-    } else if (f >= 0.5 && f < 1.5) {
-      phase = 'podium';
-      px = this.POD_X; py = this.POD_Y;
-      mood = 'happy';
-    } else if (f >= 1.5 && f < 2.1) {
-      phase = 'back';
-      const q = (f - 1.5) / 0.6;
-      px = this.POD_X + (this.PLANK_X - this.POD_X) * q;
-      py = this.POD_Y + (this.PLANK_Y - this.POD_Y) * q + Math.sin(q * Math.PI * 3) * 8;
-      flap = 0.5;
-    }
-    if (armed && phase === 'board') squash = 0.22; // 铃响后压板蓄力
-    if (st - k.sadT < 0.7) {
-      mood = 'sad';
-      if (phase === 'board') py -= Math.abs(Math.sin((st - k.sadT) * 6)) * 8; // 懊恼小跳
-    }
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(prot);
-    if (squash > 0) ctx.scale(1 + squash * 0.5, 1 - squash); // 铃响后压板蓄力
-    Animals.bird(ctx, 0, 0, 28, {
-      color: '#33507e',
-      mood,
-      pose: phase === 'fly' ? 'stretch' : 'idle',
-      beakOpen: phase === 'podium' ? 0.6 : 0,
-      wingFlap: flap
-    });
-    ctx.restore();
-    // 蓄力时的板上影子
-    if (squash > 0) {
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      ctx.beginPath(); ctx.ellipse(px, this.PLANK_Y + 26, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
+    // 企鹅状态机：每只企鹅对应一个音符（全部只读时钟推导）
+    // ① 已了结的企鹅：perfect 高举双翅欢跳庆祝 / good 原地开心 / miss 跌落沮丧，随后离场消失
+    for (const n of game.chart) {
+      if (n.state === 'hit' && n.hitT != null) {
+        const f = st - n.hitT;
+        if (f > 2.2) continue;
+        let px, py, prot = 0, wingUp = false, alpha = 1;
+        if (f < 0.5) { // 飞行
+          const p = f / 0.5;
+          px = this.PLANK_X + (this.POD_X - this.PLANK_X) * p;
+          py = this.PLANK_Y + (this.POD_Y - this.PLANK_Y) * p - Math.sin(p * Math.PI) * 120;
+          prot = -0.25 + p * 0.5;
+        } else if (f < 1.7) { // 台上庆祝
+          const c = f - 0.5;
+          px = this.POD_X; py = this.POD_Y;
+          wingUp = n.result === 'perfect';
+          if (n.result === 'perfect') py -= Math.abs(Math.sin(c * 9)) * 16;
+        } else { // 谢幕离场
+          const q = (f - 1.7) / 0.5;
+          px = this.POD_X + q * 130; py = this.POD_Y;
+          alpha = 1 - q;
+        }
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(px, py);
+        ctx.rotate(prot);
+        Animals.penguin(ctx, 0, 0, 28, { mood: 'happy', wingUp });
+        ctx.restore();
+      } else if (n.state === 'miss' && n.missT != null) {
+        const f = st - n.missT;
+        if (f > 0.9) continue;
+        ctx.save();
+        ctx.globalAlpha = 1 - f / 0.9;
+        ctx.translate(this.PLANK_X - f * 30, this.PLANK_Y + f * f * 300);
+        ctx.rotate(f * 2);
+        Animals.penguin(ctx, 0, 0, 28, { mood: 'sad' });
+        ctx.restore();
+      }
     }
 
-    // 登台闪光灯
-    if (phase === 'podium') {
+    // ② 跳板上的企鹅（铃已响、蓄力等跳）
+    if (armed) {
+      ctx.save();
+      ctx.translate(this.PLANK_X, this.PLANK_Y + sag * 0.8);
+      ctx.scale(1.11, 0.78); // 压板蓄力
+      Animals.penguin(ctx, 0, 0, 28, { mood: 'idle' });
+      ctx.restore();
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath(); ctx.ellipse(this.PLANK_X, this.PLANK_Y + 26, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // ③ 排队的企鹅（最多露 4 只，摇摇摆摆等着上板）
+    const queue = game.chart.filter(n => n.state === 'pending' && beat < n.beat - n.wait);
+    for (let i = 0; i < Math.min(4, queue.length); i++) {
+      const wob = Math.sin(beat * Math.PI * 2 + i) * 0.08;
+      Animals.penguin(ctx, 130 + i * 52, this.PLANK_Y + 4, 24, {
+        rotate: wob,
+        legPhase: Math.floor(beat * 2 + i) % 2 === 0 ? 1 : -1
+      });
+    }
+
+    // 登台闪光灯（有企鹅在台上庆祝时）
+    const celebrating = game.chart.some(n => n.state === 'hit' && n.hitT != null && st - n.hitT >= 0.5 && st - n.hitT < 1.7);
+    if (celebrating) {
       for (let i = 0; i < 4; i++) {
         const a = i * Math.PI / 2 + Math.PI / 4;
         const fx2 = this.POD_X + Math.cos(a) * 74, fy2 = this.POD_Y - 20 + Math.sin(a) * 52;
@@ -568,27 +674,45 @@ const LevelShowtime = {
       }
     }
 
-    // 大小铃铛（铃响时摇摆发声）
-    let ringHi = false, ringLo = false;
+    // 大小铃铛（铃响时摇摆发声）；谱面含 1.5 拍等待时加挂中音铃
+    const hasMid = this._cur.specs.some(([, w]) => w === 1.5);
+    let ringHi = false, ringMid = false, ringLo = false;
     for (const n of game.chart) {
       const bb = n.beat - n.wait;
       if (beat >= bb && beat - bb < 0.35) {
-        if (n.wait === 1) ringHi = true; else ringLo = true;
+        if (n.wait === 1) ringHi = true;
+        else if (n.wait === 1.5) ringMid = true;
+        else ringLo = true;
       }
     }
     this.drawBell(ctx, 130, 96, 0.85, ringHi, st);
     this.drawBell(ctx, 224, 108, 1.2, ringLo, st);
     Draw.text(ctx, '高音=1拍', 130, 140, 15, 'rgba(255,255,255,0.85)');
     Draw.text(ctx, '低音=2拍', 224, 152, 15, 'rgba(255,255,255,0.85)');
+    if (hasMid) {
+      this.drawBell(ctx, 177, 92, 1.0, ringMid, st);
+      Draw.text(ctx, '中音=1.5拍', 177, 128, 15, 'rgba(255,255,255,0.85)');
+    }
 
-    // 按键图例（右下角常驻）
+    // 按键图例（右下角常驻；含 1.5 拍等待时加一行中音说明）
     ctx.fillStyle = 'rgba(255,255,255,0.88)';
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(706, 470, 240, 56, 10);
-    else ctx.rect(706, 470, 240, 56, 10);
+    if (hasMid) {
+      if (ctx.roundRect) ctx.roundRect(706, 458, 240, 78, 10);
+      else ctx.rect(706, 458, 240, 78, 10);
+    } else {
+      if (ctx.roundRect) ctx.roundRect(706, 470, 240, 56, 10);
+      else ctx.rect(706, 470, 240, 56, 10);
+    }
     ctx.fill();
-    Draw.text(ctx, '高音铃 = 1 拍后跳', 826, 490, 17, '#1565c0');
-    Draw.text(ctx, '低音铃 = 2 拍后跳', 826, 512, 17, '#c62828');
+    if (hasMid) {
+      Draw.text(ctx, '高音铃 = 1 拍后跳', 826, 480, 17, '#1565c0');
+      Draw.text(ctx, '中音铃 = 1.5 拍后跳', 826, 502, 17, '#e8a13d');
+      Draw.text(ctx, '低音铃 = 2 拍后跳', 826, 524, 17, '#c62828');
+    } else {
+      Draw.text(ctx, '高音铃 = 1 拍后跳', 826, 490, 17, '#1565c0');
+      Draw.text(ctx, '低音铃 = 2 拍后跳', 826, 512, 17, '#c62828');
+    }
 
     // 教学提示（开头）
     if (beat >= 0 && beat < 4) {
@@ -599,26 +723,71 @@ const LevelShowtime = {
 
 /* ================================================================
  * 第 17 关 · 老鼠冲刺（长按音符）
- * 「预备」两声 → 按住蹲下蓄力；哨声 GO → 松开冲刺到奶酪。
- * 蓄力时长（dur）每次不同，全靠听哨声。
+ * 口令链：「蹲！」（提前 1 拍）→ 按下蹲下蓄力（蓄力音上升）→
+ * 真哨声 GO → 松开冲刺。蓄力较久时中途有低音假哨声——忍住别松！
+ * 三模式：normal 加入 2.5/3.5 拍蓄力与更多假哨；hard 蓄力/假哨位置种子随机。
  * ============================================================== */
 const LevelRatRace = {
   id: 'ratrace',
   name: '第 17 关 · 老鼠冲刺',
-  desc: '「预备」按住蹲下，哨声「GO!」松开冲刺！蓄力时长每次不同。',
-  hint: '按住空格 = 蓄力 · 哨声松开 · Esc = 退出',
+  desc: '「蹲！」一响就准备：按下蹲下蓄力，听到真哨声 GO 才松开！中途的低音假哨声要忍住！',
+  hint: '按住空格 = 蓄力 · 真哨声松开 · 假哨声忍住 · Esc = 退出',
   bpm: 100,
   totalBeats: 42,
 
   START_X: 210, CHEESE_X: 760, // 起跑线 / 奶酪位置
 
-  // [预备拍, 蓄力拍数]
+  // [预备拍, 蓄力拍数]（easy：与初版完全一致）
   specs: [
     [4, 1], [8, 2], [12, 1], [16, 3], [21, 2], [25, 1], [29, 2.5], [34, 1.5]
   ],
+  // normal：10 跑，加入 2.5 / 3.5 拍蓄力
+  normalSpecs: [
+    [4, 1], [8, 2.5], [13, 1], [17, 3.5], [23, 2], [27, 1.5], [31, 3], [36, 1], [39, 2.5], [44, 2]
+  ],
 
-  buildChart() {
-    return this.specs.map(([b, d]) => ({ beat: b, dur: d }));
+  // 三模式：easy 用静态值；normal 110bpm/61 拍；hard 112bpm（长度按生成谱面再收紧）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 110, totalBeats: 61 };
+    if (mode === 'hard') return { bpm: 112, totalBeats: 75 };
+    return null;
+  },
+
+  // 假哨声偏移表（相对预备拍）：easy 维持原规则（dur≥2 → dur-1 处一声）；
+  // normal 更多（dur≥3 → 两声）；hard 由种子随机（1~2 声，不在最后 0.5 拍内）
+  buildChart(mode) {
+    let specs;
+    if (mode === 'normal') {
+      specs = this.normalSpecs.map(([b, d]) =>
+        [b, d, d >= 3 ? [d - 2, d - 1] : (d >= 2 ? [d - 1] : [])]);
+    } else if (mode === 'hard') {
+      // 种子随机：10 跑，dur 1~3.5（步进 0.5）；dur≥2 时随机 1~2 个假哨
+      const rnd = mulberry32(Date.now() % 100000);
+      specs = [];
+      let b = 4;
+      for (let i = 0; i < 10; i++) {
+        const dur = 1 + Math.floor(rnd() * 6) * 0.5;
+        const fakes = [];
+        if (dur >= 2) {
+          // 可选位置共 2*dur-3 个（1 ~ dur-1，0.5 整格）：dur=2 时只能放 1 个
+          const cnt = Math.min(1 + Math.floor(rnd() * 2), 2 * dur - 3);
+          while (fakes.length < cnt) {
+            const f = 1 + Math.floor(rnd() * (2 * dur - 3)) * 0.5;
+            if (!fakes.includes(f)) fakes.push(f);
+          }
+          fakes.sort((x, y) => x - y);
+        }
+        specs.push([b, dur, fakes]);
+        b += dur + 2.5 + Math.floor(rnd() * 3) * 0.5; // 跑间恢复 2.5~3.5 拍
+      }
+      // 谱面长度每次不同：按生成结果收紧结束拍（Game.start 在调度启动前调用本函数）
+      const last = specs[specs.length - 1];
+      Game.totalBeats = last[0] + last[1] + 3;
+    } else {
+      specs = this.specs.map(([b, d]) => [b, d, d >= 2 ? [d - 1] : []]); // easy：现状
+    }
+    this._cur = { specs };
+    return specs.map(([b, d, fakes]) => ({ beat: b, dur: d, fakes }));
   },
 
   init(game) {
@@ -639,25 +808,27 @@ const LevelRatRace = {
     // 赛跑伴奏：紧张感八分贝斯脉冲
     AudioEngine.tone(t, [82.41, 82.41, 82.41, 87.31, 82.41, 82.41, 98, 110][step % 8],
       0.12, 'sawtooth', 0.11);
-    // 口令：预备（两声）→ 哨声 GO!
+    // 口令链：「蹲！」→ 哨声 GO；蓄力较久时中途插低音假哨声（忍住别松）
     for (const n of game.chart) {
-      if (n.beat === beat) {
-        AudioEngine.blok(t, 660);
-        AudioEngine.blok(t + spb * 0.5, 660);
+      if (beat === n.beat - 1) AudioEngine.tone(t, 392, spb * 0.3, 'square', 0.24); // 「蹲！」
+      if (beat === n.beat + n.dur) AudioEngine.whistle(t);                           // 真 GO!
+      for (const f of n.fakes) {
+        if (beat === n.beat + f) AudioEngine.whistle(t, true);                       // 假哨声
       }
-      if (n.beat + n.dur === beat) AudioEngine.whistle(t);
     }
   },
 
-  // 按下 = 蹲下蓄力
+  // 按下 = 蹲下蓄力（蓄力音开始上升）
   onPress(game, note, res) {
     game.rat.crouchT = Conductor.songTime();
     AudioEngine.tone(AudioEngine.now(), 196, 0.1, 'sine', 0.2); // 蹲下闷响
+    AudioEngine.fillStart(); // 蓄力音，越憋越紧
   },
 
   // 松开 = 冲刺 / 摔倒
   onRelease(game, note, res) {
     const st = Conductor.songTime();
+    AudioEngine.fillStop();
     if (res === 'miss' || res === 'over') {
       game.rat.sadT = st;
       note.tripT = st;
@@ -836,20 +1007,30 @@ const LevelRatRace = {
     ctx.closePath(); ctx.fill();
 
     // 口令文字
-    if (phase === 'hold' || (next && beat >= next.beat && beat < next.beat + next.dur)) {
-      Draw.text(ctx, '预备！', 330, 300, 36, '#e85d5d');
+    if (next && beat >= next.beat - 1 && beat < next.beat) {
+      Draw.text(ctx, '蹲！', 330, 300, 40, '#e85d5d');
+    }
+    if (phase === 'hold') {
+      Draw.text(ctx, '按住！', 330, 300, 36, '#e85d5d');
+    }
+    // 假哨声期间：忍住！
+    for (const n of game.chart) {
+      if (n.state === 'holding' && n.fakes.some(f => beat >= n.beat + f && beat < n.beat + f + 1)) {
+        Draw.text(ctx, '忍住！', 480, 190, 34, '#8e24aa');
+      }
     }
     if (cur && cur.goT != null && st - cur.goT < 0.5) {
       Draw.text(ctx, 'GO!!', 330, 300, 40, '#2e9e4e');
     }
     // 赛段计数
-    const raceNo = Math.min(8,
+    const total = game.chart.length;
+    const raceNo = Math.min(total,
       game.chart.filter(n => n.beat <= beat).length + (game.chart.some(n => n.beat > beat) ? 1 : 0));
-    Draw.text(ctx, '第 ' + raceNo + ' / 8 跑', 930, 30, 19, 'rgba(38,35,46,0.6)', 'right');
+    Draw.text(ctx, '第 ' + raceNo + ' / ' + total + ' 跑', 930, 30, 19, 'rgba(38,35,46,0.6)', 'right');
 
     // 教学提示（开头）
     if (beat >= 0 && beat < 4) {
-      Draw.text(ctx, '「预备」按住蹲下，哨声「GO!」松开冲刺！', 480, 40, 26, '#fff');
+      Draw.text(ctx, '「蹲！」后按住蓄力，真哨声 GO 才松开！', 480, 40, 26, '#fff');
     }
   }
 };
@@ -858,6 +1039,7 @@ const LevelRatRace = {
  * 第 18 关 · DJ 学校（长按音符）
  * 按住 = 搓碟：伴奏整体「被搓停」（scheduleStep 检测 holding 跳过鼓/贝斯/旋律）；
  * 「YO!」= 松开提示，音乐回来。
+ * 三模式：normal 加入 0.5 拍短搓、长短穿插；hard 持续拍数种子随机。
  * ============================================================== */
 const LevelDJ = {
   id: 'dj',
@@ -867,13 +1049,45 @@ const LevelDJ = {
   bpm: 110,
   totalBeats: 38,
 
-  // [搓碟起始拍, 持续拍数]
+  // [搓碟起始拍, 持续拍数]（easy：与初版完全一致）
   specs: [
     [4, 2], [8, 1], [12, 2], [16, 1], [20, 2], [26, 1], [28, 2], [32, 2]
   ],
+  // normal：12 段，长短穿插（含 0.5 拍短搓）
+  normalSpecs: [
+    [4, 2], [9, 0.5], [12.5, 1], [16, 2], [21.5, 0.5], [25, 1.5],
+    [29, 0.5], [33, 2], [38, 0.5], [41, 1.5], [46, 0.5], [49.5, 2]
+  ],
 
-  buildChart() {
-    return this.specs.map(([b, d]) => ({ beat: b, dur: d }));
+  // 三模式：easy 用静态值；normal 121bpm/56 拍；hard 120bpm（长度按生成谱面再收紧）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 121, totalBeats: 56 };
+    if (mode === 'hard') return { bpm: 120, totalBeats: 70 };
+    return null;
+  },
+
+  buildChart(mode) {
+    let specs;
+    if (mode === 'normal') {
+      specs = this.normalSpecs;
+    } else if (mode === 'hard') {
+      // 种子随机：14 段，dur ∈ {0.5, 1, 1.5, 2}，间隔 2~2.5 拍
+      const rnd = mulberry32(Date.now() % 100000);
+      specs = [];
+      let b = 4;
+      for (let i = 0; i < 14; i++) {
+        const dur = 0.5 + Math.floor(rnd() * 4) * 0.5;
+        specs.push([b, dur]);
+        b += dur + 2 + Math.floor(rnd() * 2) * 0.5;
+      }
+      // 谱面长度每次不同：按生成结果收紧结束拍（Game.start 在调度启动前调用本函数）
+      const last = specs[specs.length - 1];
+      Game.totalBeats = last[0] + last[1] + 3;
+    } else {
+      specs = this.specs; // easy：现状
+    }
+    this._cur = { specs };
+    return specs.map(([b, d]) => ({ beat: b, dur: d }));
   },
 
   init(game) {

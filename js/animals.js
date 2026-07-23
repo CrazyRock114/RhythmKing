@@ -271,8 +271,8 @@ Object.assign(Animals, {
       ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.arc(ex, ey, s * 0.14, 0, Math.PI * 2); ctx.fill();
     };
-    arm(-1, o.armL != null ? o.armL : 0.5);
-    arm(1, o.armR != null ? o.armR : 0.5);
+    if (o.armL !== false) arm(-1, o.armL != null ? o.armL : 0.5);
+    if (o.armR !== false) arm(1, o.armR != null ? o.armR : 0.5);
 
     // 头
     ctx.fillStyle = color;
@@ -453,6 +453,131 @@ Object.assign(Animals, {
       ctx.strokeStyle = '#e06a80';
       ctx.lineWidth = s * 0.02;
       ctx.beginPath(); ctx.moveTo(0, -s * 0.32); ctx.lineTo(0, -s * 0.18); ctx.stroke();
+    }
+    ctx.restore();
+  }
+});
+
+/* ================= 第三批动物 ================= */
+
+Object.assign(Animals, {
+
+  /* ---------- 企鹅（第 16 关） ---------- */
+  penguin(ctx, x, y, s, o) {
+    o = o || {};
+    ctx.save();
+    ctx.translate(x, y);
+    if (o.rotate) ctx.rotate(o.rotate);
+    const sq = o.squash || 0;
+    ctx.scale(1 + sq * 0.5, 1 - sq);
+    const body = o.color || '#2b3440';
+
+    // 橙色蹼足
+    ctx.fillStyle = '#ffb347';
+    const lp = o.legPhase || 0;
+    ctx.beginPath(); ctx.ellipse(-s * 0.25 - lp * s * 0.12, s * 0.85, s * 0.22, s * 0.1, -0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(s * 0.25 + lp * s * 0.12, s * 0.85, s * 0.22, s * 0.1, 0.1, 0, Math.PI * 2); ctx.fill();
+
+    // 身体 + 白肚皮
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.ellipse(0, 0, s * 0.72, s * 0.9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f5f8fa';
+    ctx.beginPath(); ctx.ellipse(0, s * 0.12, s * 0.48, s * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+
+    // 鳍状翅膀（wingUp 时高举庆祝）
+    ctx.fillStyle = body;
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.translate(side * s * 0.66, -s * 0.05);
+      ctx.rotate(side * (o.wingUp ? -0.95 : 0.3));
+      ctx.beginPath(); ctx.ellipse(0, s * 0.15, s * 0.16, s * 0.45, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    // 眼睛 + 腮红
+    Animals.eye(ctx, -s * 0.2, -s * 0.35, s * 0.13, o.mood);
+    Animals.eye(ctx, s * 0.2, -s * 0.35, s * 0.13, o.mood);
+    Animals.blush(ctx, -s * 0.4, -s * 0.16, s * 0.1);
+    Animals.blush(ctx, s * 0.4, -s * 0.16, s * 0.1);
+    // 喙
+    ctx.fillStyle = '#ffb347';
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.1, -s * 0.22);
+    ctx.lineTo(s * 0.1, -s * 0.22);
+    ctx.lineTo(0, -s * 0.05);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  },
+
+  /* ---------- 和尚（第 13 关） ---------- */
+  // 光头 + 袈裟 + 佛珠；mouthOpen(0~1) 控制张嘴幅度（吃东西用）
+  monk(ctx, x, y, s, o) {
+    o = o || {};
+    const skin = o.color || '#f2c9a0';
+    ctx.save();
+    ctx.translate(x, y);
+    const sq = o.squash || 0;
+    ctx.scale(1 + sq * 0.5, 1 - sq);
+
+    // 袈裟（盘腿坐姿的梯形）
+    ctx.fillStyle = '#e8862e';
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.85, s * 0.9);
+    ctx.quadraticCurveTo(-s * 0.8, -s * 0.1, -s * 0.35, -s * 0.25);
+    ctx.lineTo(s * 0.35, -s * 0.25);
+    ctx.quadraticCurveTo(s * 0.8, -s * 0.1, s * 0.85, s * 0.9);
+    ctx.closePath(); ctx.fill();
+    // 斜披带
+    ctx.fillStyle = '#c96a1b';
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.3, -s * 0.22);
+    ctx.lineTo(s * 0.15, -s * 0.22);
+    ctx.lineTo(-s * 0.5, s * 0.9);
+    ctx.lineTo(-s * 0.85, s * 0.9);
+    ctx.closePath(); ctx.fill();
+    // 盘腿
+    ctx.beginPath(); ctx.ellipse(0, s * 0.88, s * 0.78, s * 0.16, 0, 0, Math.PI * 2); ctx.fill();
+
+    // 光头
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.arc(0, -s * 0.62, s * 0.52, 0, Math.PI * 2); ctx.fill();
+
+    // 眼睛（打坐闭眼 / 难过垂眼）
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = s * 0.045;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (o.mood === 'sad') {
+      ctx.moveTo(-s * 0.3, -s * 0.66); ctx.lineTo(-s * 0.1, -s * 0.62);
+      ctx.moveTo(s * 0.1, -s * 0.62); ctx.lineTo(s * 0.3, -s * 0.66);
+    } else {
+      ctx.arc(-s * 0.2, -s * 0.68, s * 0.11, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.moveTo(s * 0.31, -s * 0.63);
+      ctx.arc(s * 0.2, -s * 0.68, s * 0.11, 0.15 * Math.PI, 0.85 * Math.PI);
+    }
+    ctx.stroke();
+    Animals.blush(ctx, -s * 0.36, -s * 0.5, s * 0.1);
+    Animals.blush(ctx, s * 0.36, -s * 0.5, s * 0.1);
+
+    // 嘴：mouthOpen 控制张合（吃东西的关键动作）
+    const mo = Math.max(0, Math.min(1, o.mouthOpen || 0));
+    if (mo > 0.06) {
+      ctx.fillStyle = '#7a3b2e';
+      ctx.beginPath(); ctx.ellipse(0, -s * 0.4, s * 0.15 * (0.4 + mo * 0.8), s * 0.19 * mo, 0, 0, Math.PI * 2); ctx.fill();
+      // 舌头
+      ctx.fillStyle = '#d96a6a';
+      ctx.beginPath(); ctx.ellipse(0, -s * 0.4 + s * 0.08 * mo, s * 0.09 * mo, s * 0.06 * mo, 0, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.strokeStyle = '#8a5a3b';
+      ctx.lineWidth = s * 0.04;
+      ctx.beginPath(); ctx.arc(0, -s * 0.48, s * 0.12, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
+    }
+
+    // 佛珠
+    ctx.fillStyle = '#8a5a3b';
+    for (let i = 0; i < 7; i++) {
+      const a = Math.PI * 0.25 + (i / 6) * Math.PI * 0.5;
+      ctx.beginPath(); ctx.arc(Math.cos(a) * s * 0.42, -s * 0.12 + Math.sin(a) * s * 0.4, s * 0.05, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
   }

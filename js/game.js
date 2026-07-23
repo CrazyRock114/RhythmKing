@@ -34,11 +34,17 @@ const Game = {
   _scheduler: null,
   _nextStep: 0,
 
-  start(level, onFinish) {
+  start(level, onFinish, mode) {
     this.level = level;
     this.onFinish = onFinish;
-    Conductor.start(level.bpm);
-    this.chart = level.buildChart();
+    this.mode = mode || 'easy';
+    level.mode = this.mode;
+    // 关卡可通过 setup(mode) 提供不同模式的 bpm / totalBeats，缺省用静态值（easy）
+    const su = level.setup ? level.setup(this.mode) : null;
+    this.bpm = (su && su.bpm) || level.bpm;
+    this.totalBeats = (su && su.totalBeats) || level.totalBeats;
+    Conductor.start(this.bpm);
+    this.chart = level.buildChart(this.mode);
     for (const n of this.chart) {
       n.time = Conductor.beatToTime(n.beat);
       n.state = 'pending';
@@ -46,6 +52,7 @@ const Game = {
     this.score = 0; this.combo = 0; this.maxCombo = 0; this.whiffs = 0;
     this.judges = { perfect: 0, good: 0, miss: 0 };
     this.effects = []; this.particles = [];
+    this.delayedFx = []; // judgeDelay 延迟反馈队列
     this._nextStep = 0;
     level.init(this);
     this.running = true;
@@ -65,11 +72,22 @@ const Game = {
     const horizon = AudioEngine.now() + 0.15;
     while (true) {
       const beat = this._nextStep / 2;
-      if (beat > this.level.totalBeats) break;
+      if (beat > this.totalBeats) break;
       const t = Conductor.beatToTime(beat);
       if (t >= horizon) break;
       this.level.scheduleStep(this._nextStep, t, this);
       this._nextStep++;
+    }
+  },
+
+  // 判定反馈：judgeDelay（拍）>0 时延迟到滞空结束才公布结果（小狗飞盘用）
+  feedback(res, text, color) {
+    const delay = (this.level.judgeDelay || 0) * Conductor.secPerBeat();
+    if (delay > 0) {
+      this.delayedFx.push({ at: Conductor.songTime() + delay, text, color, res });
+    } else {
+      this.addEffect(text, color);
+      if (res === 'miss') AudioEngine.sfxMiss();
     }
   },
 
@@ -97,8 +115,7 @@ const Game = {
       best.result = 'wrong';
       this.judges.miss++;
       this.combo = 0;
-      AudioEngine.sfxMiss();
-      this.addEffect('按错了!', '#e85d5d');
+      this.feedback('miss', '按错了!', '#e85d5d');
       this.level.onJudge(this, best, 'miss');
       return;
     }
@@ -117,7 +134,7 @@ const Game = {
     this.score += res === 'perfect' ? 2 : 1;
     this.combo++;
     if (this.combo > this.maxCombo) this.maxCombo = this.combo;
-    this.addEffect(res === 'perfect' ? 'PERFECT!' : 'GOOD', res === 'perfect' ? '#ffd94d' : '#7de38b');
+    this.feedback(res, res === 'perfect' ? 'PERFECT!' : 'GOOD', res === 'perfect' ? '#ffd94d' : '#7de38b');
     this.level.onJudge(this, best, res);
   },
 
@@ -155,14 +172,23 @@ const Game = {
     const now = AudioEngine.now();
     const st = Conductor.songTime();
     const spb = Conductor.secPerBeat();
+    // 延迟判定反馈（judgeDelay：滞空结束才公布）
+    for (const fx of this.delayedFx) {
+      if (!fx.done && st >= fx.at) {
+        fx.done = true;
+        this.addEffect(fx.text, fx.color);
+        if (fx.res === 'miss') AudioEngine.sfxMiss();
+        else if (fx.res === 'perfect') AudioEngine.tone(AudioEngine.now(), 1320, 0.09, 'square', 0.18);
+      }
+    }
+    this.delayedFx = this.delayedFx.filter(fx => !fx.done);
     for (const n of this.chart) {
       // MISS：超过判定窗仍未按（n.time 是 ctx 绝对时间，必须用 now 比较）
       if (n.state === 'pending' && now - n.time > this.GOOD) {
         n.state = 'miss';
         this.judges.miss++;
         this.combo = 0;
-        AudioEngine.sfxMiss();
-        this.addEffect('MISS', '#e85d5d');
+        this.feedback('miss', 'MISS', '#e85d5d');
         this.level.onJudge(this, n, 'miss');
       }
       // 长按音符：一直按住不放，超过松开判定窗 → MISS（灌太满）
@@ -176,7 +202,7 @@ const Game = {
       }
     }
     // 结束
-    const endTime = this.level.totalBeats * spb;
+    const endTime = this.totalBeats * spb;
     if (st > endTime + 1.2) { this.finish(); return; }
     // 特效推进
     for (const e of this.effects) e.t += dt;
@@ -256,7 +282,7 @@ const Game = {
       const size = 26 + Math.min(this.combo, 30) * 0.4;
       Draw.text(ctx, this.combo + ' 连击!', 480, 46, size, '#ffd94d');
     }
-    const prog = Math.max(0, Math.min(1, Conductor.songBeat() / this.level.totalBeats));
+    const prog = Math.max(0, Math.min(1, Conductor.songBeat() / this.totalBeats));
     ctx.fillStyle = 'rgba(255,255,255,0.18)';
     ctx.fillRect(0, 0, 960, 5);
     ctx.fillStyle = '#ffd94d';

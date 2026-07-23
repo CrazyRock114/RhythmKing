@@ -4,6 +4,9 @@
  *   第 13 关 · 贪吃和尚（Munchy Monk）：听唱数吃包子（半拍一口）
  *   第 14 关 · 打包小能手（Packing）：双键分拣，空格接糖 / F 拍虫
  * 关卡接口与 levels.js 相同；长按（onPress/onRelease）与双键（usesAlt）扩展见 levels2.js。
+ * 每关支持 easy/normal/hard 三模式：setup(mode) 返回 bpm/totalBeats（easy 返回 null 用静态值），
+ * buildChart(mode) 生成谱面并把结构数据（组/乐句/指令/物品表）存到 this._cur，scheduleStep/draw 统一读 _cur；
+ * hard 谱面在 setup 里用 mulberry32 种子一次生成并暂存 _hardGen（totalBeats 需先于 buildChart 确定），buildChart 消费。
  */
 'use strict';
 
@@ -15,18 +18,82 @@
 const LevelTapTrial = {
   id: 'taptrial',
   name: '第 11 关 · 踢踏舞',
-  desc: '三连音！听同伴「哒哒哒」，下一拍你也「哒哒哒」！',
+  desc: '三连音！听同伴「哒哒哒」，下一拍换你！后面还有六连音和二连音的变化。',
   hint: '空格 / 点击 = 踢踏 · Esc = 退出',
   bpm: 100,
   totalBeats: 40,
 
-  // 组首拍：示范在 c、c+1/3、c+2/3，玩家音符在 c+1、c+1+1/3、c+1+2/3
-  groups: [4, 6, 8, 10, 14, 18, 20, 22, 26, 28, 32, 34],
+  // 组首拍与花样：tri=三连音（1 拍 3 下）、six=六连音（2 拍 6 下）、half=二连音（2 拍 2 下）
+  // off-tri=反拍三连（normal/hard 新增：示范从 c+0.5 起，回应相应顺延半拍）
+  groups: [
+    [4, 'tri'], [6, 'tri'], [8, 'six'], [12, 'tri'], [16, 'half'],
+    [18, 'tri'], [22, 'six'], [26, 'tri'], [30, 'half'], [32, 'tri'], [36, 'six']
+  ],
 
-  buildChart() {
+  // normal：14 组，加入 off-tri 花样
+  groupsNormal: [
+    [4, 'tri'], [6, 'tri'], [8, 'six'], [12, 'off-tri'], [15, 'tri'],
+    [18, 'half'], [21, 'off-tri'], [24, 'six'], [28, 'tri'], [31, 'off-tri'],
+    [34, 'half'], [38, 'tri'], [44, 'six'], [50, 'off-tri']
+  ],
+
+  // 三模式：normal 提速 1.1 倍；hard 谱面种子随机，一次生成并暂存（totalBeats 需先于 buildChart 确定）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 100 * 1.1, totalBeats: 56 };
+    if (mode === 'hard') {
+      this._hardGen = this._genHard(mulberry32(Date.now() % 100000));
+      return { bpm: 112, totalBeats: this._hardGen.totalBeats };
+    }
+    return null; // easy：用静态 bpm/totalBeats
+  },
+
+  // hard：16 组，花样（tri/six/half/off-tri）种子随机，组间隔至少 2 拍 + 随机休止
+  _genHard(rnd) {
+    const types = ['tri', 'six', 'half', 'off-tri'];
+    const groups = [];
+    let c = 4, end = 4;
+    for (let i = 0; i < 16; i++) {
+      const type = types[Math.floor(rnd() * types.length)];
+      groups.push([c, type]);
+      const offs = this.demoOffsets(type);
+      end = c + this.respStart(type) + offs[offs.length - 1]; // 本组回应结束拍
+      c += Math.ceil(end - c) + 2 + (rnd() < 0.3 ? 1 : 0);
+    }
+    return { groups, totalBeats: Math.ceil(end) + 2 };
+  },
+
+  // 示范击打的拍偏移（相对组首 c）
+  demoOffsets(type) {
+    if (type === 'six') return [0, 1 / 3, 2 / 3, 1, 4 / 3, 5 / 3];
+    if (type === 'half') return [0, 1];
+    if (type === 'off-tri') return [0.5, 5 / 6, 7 / 6];
+    return [0, 1 / 3, 2 / 3];
+  },
+
+  // 回应起点（示范结束后 1 拍开始；off-tri 顺延半拍）
+  respStart(type) {
+    if (type === 'tri') return 1;
+    if (type === 'off-tri') return 1.5;
+    return 2;
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    let groups;
+    if (mode === 'hard') {
+      const gen = this._hardGen || this._genHard(mulberry32(Date.now() % 100000));
+      this._hardGen = null;
+      groups = gen.groups;
+    } else {
+      groups = mode === 'normal' ? this.groupsNormal : this.groups;
+    }
+    this._cur = { groups }; // scheduleStep/draw 统一读 _cur
     const notes = [];
-    for (const c of this.groups) {
-      for (let i = 0; i < 3; i++) notes.push({ beat: c + 1 + i / 3, tap: i });
+    for (const [c, type] of groups) {
+      const rs = this.respStart(type);
+      this.demoOffsets(type).forEach((off, i) => {
+        notes.push({ beat: c + rs + off, tap: i });
+      });
     }
     return notes;
   },
@@ -51,12 +118,12 @@ const LevelTapTrial = {
       // 预备拍
       if (beat < 4) AudioEngine.blok(t, beat === 3 ? 1320 : 880);
     }
-    // 示范三连音：1/3 拍不在半拍网格上，覆盖到组首拍 c 时一次性排 3 个
-    for (const c of this.groups) {
+    // 示范踢踏：1/3 拍不在半拍网格上，覆盖到组首拍 c 时按拍偏移一次性排整组
+    for (const [c, type] of this._cur.groups) {
       if (beat === c) {
-        AudioEngine.tick(t, 1600);
-        AudioEngine.tick(t + spb / 3, 1600);
-        AudioEngine.tick(t + spb * 2 / 3, 1600);
+        this.demoOffsets(type).forEach((off) => {
+          AudioEngine.tick(t + off * spb, 1600);
+        });
       }
     }
   },
@@ -78,7 +145,7 @@ const LevelTapTrial = {
     game.tap.stumbleT = Conductor.songTime();
   },
 
-  // 踢踏礼帽（猫没有帽子参数，手动补一顶）
+  // 踢踏礼帽（猫没有帽子参数，手动补一顶；y 与身体同步传入）
   hat(ctx, x, y, s) {
     ctx.fillStyle = '#26232e';
     ctx.beginPath(); ctx.ellipse(x, y - s * 1.18, s * 0.56, s * 0.1, 0, 0, Math.PI * 2); ctx.fill();
@@ -127,11 +194,12 @@ const LevelTapTrial = {
     ctx.fillRect(30, 26, 8, 160);
     ctx.fillRect(922, 26, 8, 160);
 
-    // 当前阶段：示范窗口 [c, c+1)，回应窗口 [c+1, c+2)
-    let demoC = -1, respOn = false;
-    for (const c of this.groups) {
-      if (beat >= c && beat < c + 1) demoC = c;
-      if (beat >= c + 1 && beat < c + 2) respOn = true;
+    // 当前阶段：示范窗口 [c, c+rs)，回应窗口 [c+rs, c+2rs)
+    let demo = null, respOn = false;
+    for (const [c, type] of this._cur.groups) {
+      const rs = this.respStart(type);
+      if (beat >= c && beat < c + rs) demo = { c, type };
+      if (beat >= c + rs && beat < c + rs * 2) respOn = true;
     }
 
     // 舞台地板（木纹）
@@ -159,7 +227,7 @@ const LevelTapTrial = {
       ctx.fillStyle = active ? 'rgba(255,236,170,0.22)' : 'rgba(255,236,170,0.05)';
       ctx.beginPath(); ctx.ellipse(cx, 452, 120, 15, 0, 0, Math.PI * 2); ctx.fill();
     };
-    spot(350, demoC >= 0);
+    spot(350, !!demo);
     spot(650, respOn);
 
     // 脚灯（一排暖色小灯随节奏呼吸）
@@ -169,17 +237,22 @@ const LevelTapTrial = {
       ctx.beginPath(); ctx.arc(i * 84 + 18, 522, 7, 0, Math.PI * 2); ctx.fill();
     }
 
-    // 示范猫踢踏动画：1 拍内 3 次交替腿
+    // 示范猫踢踏动画：每下交替腿（按拍偏移定位最近一下，off-tri 起打前先不动）
     let dLeg = 0, dSquash = 0;
-    if (demoC >= 0) {
-      const p = beat - demoC;
-      const idx = Math.min(2, Math.floor(p * 3));
-      dLeg = idx % 2 === 0 ? 1 : -1;
-      const q = p * 3 - idx;
-      dSquash = Math.max(0, 0.14 * (1 - q * 2.5));
+    if (demo) {
+      const p = beat - demo.c;
+      const offs = this.demoOffsets(demo.type);
+      const div = demo.type === 'half' ? 1 : 3;
+      let idx = -1;
+      for (let i = 0; i < offs.length; i++) if (p >= offs[i]) idx = i;
+      if (idx >= 0) {
+        dLeg = idx % 2 === 0 ? 1 : -1;
+        const q = (p - offs[idx]) * div;
+        dSquash = Math.max(0, 0.14 * (1 - q * 2.5));
+      }
       // 每一下的尘土与「哒」字
-      for (let i = 0; i < 3; i++) {
-        const dt = beat - (demoC + i / 3);
+      offs.forEach((off) => {
+        const dt = beat - (demo.c + off);
         if (dt > 0 && dt < 0.3) {
           this.dust(ctx, 270, 436, dt);
           this.dust(ctx, 430, 436, dt);
@@ -189,31 +262,33 @@ const LevelTapTrial = {
           Draw.text(ctx, '哒', 350, 296 - dt * 55, 26, '#ffe9b3');
           ctx.globalAlpha = 1;
         }
-      }
+      });
     }
 
-    // 两只示范猫（灰蓝色，动作同步）
+    // 两只示范猫（灰蓝色，动作同步；帽子与身体同一个 y）
     const bob = Math.sin(beat * Math.PI) * 3;
     for (const dx of [270, 430]) {
-      Animals.cat(ctx, dx, 400 + (demoC >= 0 ? 0 : bob), 38, {
+      const dy = 400 + (demo ? 0 : bob);
+      Animals.cat(ctx, dx, dy, 38, {
         color: '#8fa8c8',
-        mood: demoC >= 0 ? 'happy' : 'idle',
+        mood: demo ? 'happy' : 'idle',
         legPhase: dLeg,
         squash: dSquash,
         armL: 0.5 - dLeg * 0.35,
         armR: 0.5 + dLeg * 0.35,
-        tailUp: demoC >= 0 ? 1 : 0
+        tailUp: demo ? 1 : 0
       });
-      this.hat(ctx, dx, 400, 38);
+      this.hat(ctx, dx, dy, 38);
     }
 
-    // 玩家猫（橙色）：命中时交替抬腿带尘土
+    // 玩家猫（橙色）：命中时交替抬腿带尘土；帽子与身体同一个 y
     const tapping = st - tp.tapT < 0.22;
     const pLeg = tapping ? (tp.taps % 2 === 0 ? 1 : -1) : 0;
     let mood = 'idle';
     if (st - tp.sadT < 0.6 || st - tp.stumbleT < 0.4) mood = 'sad';
     else if (st - tp.tapT < 0.3) mood = 'happy';
-    Animals.cat(ctx, 650, 400 + (respOn ? 0 : bob), 40, {
+    const py = 400 + (respOn ? 0 : bob);
+    Animals.cat(ctx, 650, py, 40, {
       color: '#f5a35c',
       mood,
       legPhase: pLeg,
@@ -222,12 +297,12 @@ const LevelTapTrial = {
       armR: 0.5 + pLeg * 0.35,
       tailUp: tapping ? 1 : 0
     });
-    this.hat(ctx, 650, 400, 40);
+    this.hat(ctx, 650, py, 40);
     if (st - tp.tapT < 0.18) this.dust(ctx, 650, 438, (st - tp.tapT) / Conductor.secPerBeat());
     Draw.text(ctx, '▼ 你', 650, 300, 22, '#c62828');
 
     // 阶段提示
-    if (demoC >= 0) Draw.text(ctx, '听！', 350, 250, 32, '#ffe9b3');
+    if (demo) Draw.text(ctx, '听！', 350, 250, 32, '#ffe9b3');
     else if (respOn) Draw.text(ctx, '轮到你！', 650, 250, 32, '#7de38b');
 
     // 教学提示（预备拍）
@@ -239,22 +314,64 @@ const LevelTapTrial = {
 
 /* ================================================================
  * 第 12 关 · 合唱团
- * 指挥喊「唱！」（音符前 1 拍）= 按住开唱；喊「停！」（结束前 0.5 拍）= 松开收声。
- * 按住期间 choirStart() 垫底和声，松开 choirStop()。
+ * 两只同伴羊驼开口领唱（持续和弦），听到他们开唱就按住跟唱，
+ * 他们收声你就松开——按与松全靠耳朵，不靠文字。
+ * 按住期间 choirStart() 为你的声部，松开 choirStop()。
  * ============================================================== */
 const LevelGlee = {
   id: 'glee',
   name: '第 12 关 · 合唱团',
-  desc: '听指挥：「唱！」=按住开唱，「停！」=松开收声。',
-  hint: '按住空格 = 唱 · 听「停」松开 · Esc = 退出',
+  desc: '跟着同伴唱：他们开口你就按住跟唱，他们收声你就松开！',
+  hint: '按住空格 = 跟唱 · 同伴收声时松开 · Esc = 退出',
   bpm: 92,
   totalBeats: 46,
 
   // [开唱拍, 时长(拍)]
   holds: [[4, 1], [8, 2], [13, 1.5], [18, 3], [24, 2], [29, 1], [33, 2.5], [39, 3]],
 
-  buildChart() {
-    return this.holds.map(([b, d]) => ({ beat: b, dur: d }));
+  // normal：12 乐句，加入 2.5/3.5 拍长音，间隔更密
+  holdsNormal: [
+    [4, 1], [9, 2.5], [13, 1.5], [18, 3], [23, 2], [28, 3.5],
+    [33, 1], [38, 2.5], [43, 2], [48, 3.5], [53, 1.5], [60, 3]
+  ],
+
+  // 三模式：normal 提速 1.1 倍；hard 乐句种子随机，一次生成并暂存（totalBeats 需先于 buildChart 确定）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 92 * 1.1, totalBeats: 66 };
+    if (mode === 'hard') {
+      this._hardGen = this._genHard(mulberry32(Date.now() % 100000));
+      return { bpm: 100, totalBeats: this._hardGen.totalBeats };
+    }
+    return null; // easy：用静态 bpm/totalBeats
+  },
+
+  // hard：15 乐句，开唱拍/时长种子随机（dur∈{1,…,3.5}，间隔≥dur+2，再随机休 0~1 拍）
+  _genHard(rnd) {
+    const durs = [1, 1.5, 2, 2.5, 3, 3.5];
+    const rests = [0, 0.5, 1];
+    const holds = [];
+    let c = 4;
+    for (let i = 0; i < 15; i++) {
+      const dur = durs[Math.floor(rnd() * durs.length)];
+      holds.push([c, dur]);
+      c += dur + 2 + rests[Math.floor(rnd() * rests.length)];
+    }
+    const last = holds[holds.length - 1];
+    return { holds, totalBeats: Math.ceil(last[0] + last[1]) + 2 };
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    let holds;
+    if (mode === 'hard') {
+      const gen = this._hardGen || this._genHard(mulberry32(Date.now() % 100000));
+      this._hardGen = null;
+      holds = gen.holds;
+    } else {
+      holds = mode === 'normal' ? this.holdsNormal : this.holds;
+    }
+    this._cur = { holds }; // 领唱音频/绘制直接读 game.chart（与本谱面一致）
+    return holds.map(([b, d]) => ({ beat: b, dur: d }));
   },
 
   init(game) {
@@ -275,10 +392,16 @@ const LevelGlee = {
       const arp = [523.25, 659.25, 783.99, 659.25];
       AudioEngine.tone(t, arp[Math.floor(beat) % 4], spb * 0.32, 'triangle', 0.05);
     }
-    // 指挥口令：开唱前 1 拍喊「唱！」，收声前 0.5 拍喊「停！」
+    // 同伴领唱：乐句开始时唱出持续和弦直到乐句结束——开口你就按，收声你就松
     for (const n of game.chart) {
-      if (beat === n.beat - 1) AudioEngine.blok(t, 880);
-      if (beat === n.beat + n.dur - 0.5) AudioEngine.blok(t, 523);
+      if (beat === n.beat) {
+        const durSec = n.dur * spb + 0.05;
+        AudioEngine.tone(t, 220, durSec, 'triangle', 0.15);
+        AudioEngine.tone(t, 277.18, durSec, 'triangle', 0.11);
+        AudioEngine.tone(t, 329.63, durSec, 'triangle', 0.09);
+      }
+      // 开始前 1 拍：指挥轻声吸气提醒
+      if (beat === n.beat - 1) AudioEngine.blok(t, 660);
     }
   },
 
@@ -483,7 +606,7 @@ const LevelGlee = {
 
     // 教学提示（预备拍）
     if (beat >= 0 && beat < 4) {
-      Draw.text(ctx, '听指挥：「唱！」=按住开唱，「停！」=松开收声！', 480, 130, 27, 'rgba(255,255,255,0.95)');
+      Draw.text(ctx, '听到同伴开唱就按住，他们收声你就松！', 480, 130, 27, 'rgba(255,255,255,0.95)');
     }
   }
 };
@@ -502,7 +625,7 @@ const LevelMonk = {
   totalBeats: 44,
 
   MX: 380,  // 和尚嘴 x
-  MY: 292,  // 和尚嘴 y
+  MY: 327,  // 和尚嘴 y（与 Animals.monk 嘴部位置对齐）
 
   // [指令拍, 个数]：指令从指令拍起半拍唱一个音，回应从指令后 2 拍起半拍一口
   commands: [
@@ -510,9 +633,48 @@ const LevelMonk = {
     [22, 3], [26, 1], [28, 2], [31, 3], [35, 2], [38, 3]
   ],
 
-  buildChart() {
+  // normal：15 条指令，加入「4 个！」（半拍连吃 4 口）
+  commandsNormal: [
+    [4, 1], [7, 2], [10, 3], [14, 4], [18, 1], [21, 3], [24, 2],
+    [28, 4], [32, 2], [35, 3], [39, 1], [43, 4], [47, 2], [51, 3], [56, 4]
+  ],
+
+  // 三模式：normal 提速 1.1 倍；hard 指令种子随机，一次生成并暂存（totalBeats 需先于 buildChart 确定）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 108 * 1.1, totalBeats: 62 };
+    if (mode === 'hard') {
+      this._hardGen = this._genHard(mulberry32(Date.now() % 100000));
+      return { bpm: 118, totalBeats: this._hardGen.totalBeats };
+    }
+    return null; // easy：用静态 bpm/totalBeats
+  },
+
+  // hard：18 条指令，个数 1~4 种子随机 + 随机休止（回应结束与下一指令至少隔 1 拍）
+  _genHard(rnd) {
+    const commands = [];
+    let c = 4;
+    for (let i = 0; i < 18; i++) {
+      const k = 1 + Math.floor(rnd() * 4);
+      commands.push([c, k]);
+      c += 2 + Math.ceil((k - 1) / 2) + (rnd() < 0.5 ? 1 : 2);
+    }
+    const last = commands[commands.length - 1];
+    return { commands, totalBeats: Math.ceil(last[0] + 2 + (last[1] - 1) * 0.5) + 2 };
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    let commands;
+    if (mode === 'hard') {
+      const gen = this._hardGen || this._genHard(mulberry32(Date.now() % 100000));
+      this._hardGen = null;
+      commands = gen.commands;
+    } else {
+      commands = mode === 'normal' ? this.commandsNormal : this.commands;
+    }
+    this._cur = { commands }; // scheduleStep/draw 统一读 _cur
     const notes = [];
-    for (const [c, k] of this.commands) {
+    for (const [c, k] of commands) {
       for (let i = 0; i < k; i++) notes.push({ beat: c + 2 + i * 0.5, k, idx: i });
     }
     return notes;
@@ -536,7 +698,7 @@ const LevelMonk = {
       if (beat < 4) AudioEngine.blok(t, beat === 3 ? 1320 : 880);
     }
     // 指令唱词：k 个音，半拍一个，音高逐个上扬
-    for (const [c, k] of this.commands) {
+    for (const [c, k] of this._cur.commands) {
       for (let i = 0; i < k; i++) {
         if (beat === c + i * 0.5) AudioEngine.blok(t, 587 + i * 110);
       }
@@ -558,21 +720,6 @@ const LevelMonk = {
   onWhiff(game) {
     // 咬了个空：嚼到空气
     game.monk.chewT = Conductor.songTime();
-  },
-
-  // 闭眼打坐（羊驼没有闭眼参数，盖住眼睛补两道垂眼弧）
-  closedEyes(ctx, x, y, s) {
-    const hy = y - s * 1.3;
-    for (const side of [-1, 1]) {
-      const ex = x + side * s * 0.14;
-      const ey = hy - s * 0.06;
-      ctx.fillStyle = '#e8a33d';
-      ctx.beginPath(); ctx.arc(ex, ey, s * 0.14, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = s * 0.045;
-      ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.arc(ex, ey - s * 0.02, s * 0.09, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
-    }
   },
 
   // 画一个包子
@@ -660,7 +807,7 @@ const LevelMonk = {
 
     // 当前指令（唱词窗口 [c, c+2)）
     let cue = null;
-    for (const [c, k] of this.commands) {
+    for (const [c, k] of this._cur.commands) {
       if (beat >= c && beat < c + 2) { cue = { c, k }; break; }
     }
 
@@ -699,37 +846,26 @@ const LevelMonk = {
       }
     }
 
-    // 和尚（闭眼打坐的羊驼，僧袍色；alpaca 不支持 squash，用画布变换压扁）
-    const chewing = st - mk.chewT < 0.22;
+    // 和尚（光头袈裟打坐：包子快到嘴边时张嘴，咬下瞬间大张）
+    const chewing = st - mk.chewT < 0.3;
     const sad = st - mk.sadT < 0.6;
-    const monkMood = sad ? 'sad' : (st - mk.chewT < 0.45 ? 'happy' : 'idle');
-    ctx.save();
-    ctx.translate(this.MX, 336);
-    if (chewing) ctx.scale(1.13, 0.78);
-    ctx.translate(-this.MX, -336);
-    Animals.alpaca(ctx, this.MX, 336, 40, {
-      color: '#e8a33d',
-      mood: monkMood
-    });
-    this.closedEyes(ctx, this.MX, 336, 40);
-    ctx.restore();
-    // 佛珠
-    ctx.fillStyle = '#7a3b2a';
-    for (let i = 0; i < 7; i++) {
-      const a = Math.PI * (0.28 + i * 0.073);
-      ctx.beginPath();
-      ctx.arc(this.MX + Math.cos(a) * 24, 342 + Math.sin(a) * 24, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // 咀嚼瞬间张嘴
+    const monkMood = sad ? 'sad' : (st - mk.chewT < 0.5 ? 'happy' : 'idle');
+    let mouthOpen = 0;
     if (chewing) {
-      ctx.fillStyle = '#6e2f2f';
-      ctx.beginPath(); ctx.ellipse(this.MX, this.MY - 2, 6, 8, 0, 0, Math.PI * 2); ctx.fill();
+      mouthOpen = 1;
+    } else {
+      for (const n of game.chart) {
+        if (n.state === 'pending' && n.beat - beat > 0 && n.beat - beat < 0.3) {
+          mouthOpen = 0.55;
+          break;
+        }
+      }
     }
+    Animals.monk(ctx, this.MX, 345, 45, { mood: monkMood, mouthOpen });
     // 流汗（miss 后）
     if (sad) {
       ctx.fillStyle = '#7ec8e8';
-      ctx.beginPath(); ctx.ellipse(this.MX + 30, 268, 5, 8, 0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(this.MX + 30, 290, 5, 8, 0.2, 0, Math.PI * 2); ctx.fill();
     }
 
     // 包子：从右侧飞入嘴，命中消失，错过落地
@@ -782,11 +918,56 @@ const LevelPacking = {
   candies: [4, 6, 8, 10, 13, 15, 18, 20, 22, 25, 27, 30, 33, 36],
   bugs: [5, 9, 12, 16, 19, 23, 26, 31, 34, 37, 38],
 
-  buildChart() {
-    const notes = [];
-    for (const b of this.candies) notes.push({ beat: b, key: 'main' });
-    for (const b of this.bugs) notes.push({ beat: b, key: 'alt' });
-    return notes;
+  // normal：32 物品（[拍, 键]），更多半拍连击与 main/alt 交替
+  itemsNormal: [
+    [4, 'main'], [6, 'alt'], [8, 'main'], [9.5, 'alt'], [10, 'main'], [12, 'alt'],
+    [14, 'main'], [15.5, 'alt'], [17.5, 'main'], [19, 'alt'], [19.5, 'main'], [22, 'alt'],
+    [24, 'main'], [25.5, 'alt'], [27.5, 'main'], [29, 'alt'], [30.5, 'main'], [32, 'alt'],
+    [34, 'main'], [36, 'alt'], [36.5, 'main'], [39.5, 'alt'], [41.5, 'main'], [43, 'alt'],
+    [44.5, 'main'], [46.5, 'alt'], [48, 'main'], [50, 'alt'], [50.5, 'main'], [53, 'alt'],
+    [54.5, 'main'], [56, 'alt']
+  ],
+
+  // 三模式：normal 提速 1.1 倍；hard 物品序列种子随机，一次生成并暂存（totalBeats 需先于 buildChart 确定）
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 110 * 1.1, totalBeats: 60 };
+    if (mode === 'hard') {
+      this._hardGen = this._genHard(mulberry32(Date.now() % 100000));
+      return { bpm: 122, totalBeats: this._hardGen.totalBeats };
+    }
+    return null; // easy：用静态 bpm/totalBeats
+  },
+
+  // hard：44 物品，糖果(main)/虫(alt)种子随机；最小间隔 0.5 拍（半拍只作同键连击且不连续出现）
+  _genHard(rnd) {
+    const gaps = [0.5, 1, 1, 1, 1.5, 2];
+    const items = [];
+    let c = 4, prevKey = 'main', prevGap = 1;
+    for (let i = 0; i < 44; i++) {
+      let gap = i === 0 ? 0 : gaps[Math.floor(rnd() * gaps.length)];
+      if (prevGap === 0.5 && gap === 0.5) gap = 1; // 不连续半拍
+      c += gap; // gap 是与上一物品的间距，先推进再落子
+      const key = (i > 0 && gap === 0.5) ? prevKey : (rnd() < 0.55 ? 'main' : 'alt');
+      items.push([c, key]);
+      prevKey = key; prevGap = gap;
+    }
+    return { items, totalBeats: Math.ceil(c) + 2 };
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    let items;
+    if (mode === 'hard') {
+      const gen = this._hardGen || this._genHard(mulberry32(Date.now() % 100000));
+      this._hardGen = null;
+      items = gen.items;
+    } else if (mode === 'normal') {
+      items = this.itemsNormal;
+    } else {
+      items = this.candies.map(b => [b, 'main']).concat(this.bugs.map(b => [b, 'alt']));
+    }
+    this._cur = { items }; // 预告音/绘制直接读 game.chart（与本谱面一致）
+    return items.map(([b, key]) => ({ beat: b, key }));
   },
 
   init(game) {

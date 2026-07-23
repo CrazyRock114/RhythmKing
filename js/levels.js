@@ -2,7 +2,10 @@
  *
  * 关卡接口（由 game.js 驱动）：
  *   id / name / desc / bpm / totalBeats
- *   buildChart()            返回音符数组 [{ beat, ... }]，beat 为目标拍（浮点，0.5 网格）
+ *   setup(mode)             可选：按模式返回 { bpm, totalBeats }；缺省（easy）用静态值
+ *   buildChart(mode)        返回音符数组 [{ beat, ... }]，beat 为目标拍（浮点，0.5 网格）。
+ *                           easy（缺省）谱面与原有关卡完全一致；normal/hard 在其上加长加密。
+ *                           谱面依赖的结构性数据生成后存 this._cur，scheduleStep/draw 统一读它
  *   init(game)              关卡状态初始化
  *   scheduleStep(step, t, game)  每半拍被调度器调用一次，t 为该半拍的 ctx 绝对时间
  *   draw(game, ctx)         每帧渲染
@@ -143,16 +146,48 @@ const LevelKarate = {
   TX: 230,  // 目标圈 x
   TY: 310,  // 目标圈 y
 
-  buildChart() {
-    const beats = [
-      4, 5, 6, 7, 8, 9, 10, 11,           // 每拍一个，热身
-      13, 13.5, 14, 14.5, 15, 15.5, 16,   // 加入半拍
-      18, 19, 20, 21,
-      22, 22.5, 23, 24,
-      26, 26.5, 27, 27.5, 28, 28.5, 29,
-      32                                   // 终结大岩石
-    ];
-    return beats.map(b => ({ beat: b, big: b === 32 }));
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 110, totalBeats: 52 };
+    if (mode === 'hard') return { bpm: 115, totalBeats: 60 };
+    return null; // easy：用静态值
+  },
+
+  buildChart(mode) {
+    let beats;
+    if (mode === 'normal') {
+      beats = [
+        4, 5, 6, 7, 8, 9, 10, 11,           // 每拍一个，热身
+        13, 13.5, 14, 14.5, 15, 15.5, 16,   // 加入半拍
+        18, 19, 20, 21,
+        22, 22.5, 23, 24,
+        26, 26.5, 27, 27.5, 28,             // 三连半拍组合
+        30, 30.5, 31, 32, 32.5, 33, 34,     // 更密的半拍变体
+        36, 37, 38, 39,
+        41, 41.5, 42, 42.5, 43,
+        48                                   // 终结大岩石
+      ];
+    } else if (mode === 'hard') {
+      // 种子随机：从 2 拍片段库拼接（单发×2 / 双发半拍 / 休止+单发 / 三连半拍）
+      const rnd = mulberry32(Date.now() % 100000);
+      const frags = [[0, 1], [0, 0.5], [1], [0, 0.5, 1]];
+      beats = [];
+      for (let s = 4; s <= 54; s += 2) {
+        const f = frags[Math.floor(rnd() * frags.length)];
+        for (const o of f) beats.push(s + o);
+      }
+      beats.push(56); // 终结大岩石
+    } else {
+      beats = [
+        4, 5, 6, 7, 8, 9, 10, 11,           // 每拍一个，热身
+        13, 13.5, 14, 14.5, 15, 15.5, 16,   // 加入半拍
+        18, 19, 20, 21,
+        22, 22.5, 23, 24,
+        26, 26.5, 27, 27.5, 28, 28.5, 29,
+        32                                   // 终结大岩石
+      ];
+    }
+    const last = beats[beats.length - 1];
+    return beats.map(b => ({ beat: b, big: b === last }));
   },
 
   init(game) {
@@ -308,7 +343,21 @@ const LevelEcho = {
     [0, 0.5, 1, 2, 3, 3.5],
     [0, 1, 1.5, 2.5, 4, 5.5, 6]
   ],
+  // normal：5 轮，后两轮为新增的含附点节奏型
+  patternsNormal: [
+    [0, 1, 2, 3],
+    [0, 1.5, 2, 3.5],
+    [0, 0.5, 1, 2, 3, 3.5],
+    [0, 1, 1.5, 2.5, 3.5],
+    [0, 0.5, 1.5, 2, 3]
+  ],
   scale: [523.25, 587.33, 659.25, 783.99, 880],
+
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 101, totalBeats: 4 + 5 * 16 + 2 };
+    if (mode === 'hard') return { bpm: 100, totalBeats: 4 + 6 * 16 + 2 };
+    return null; // easy：用静态值
+  },
 
   roundStart(r) { return 4 + r * 16; },
 
@@ -316,15 +365,36 @@ const LevelEcho = {
   phaseOf(beat) {
     if (beat < 4) return null;
     const r = Math.floor((beat - 4) / 16);
-    if (r > 3) return null;
+    if (r >= this._cur.rounds) return null;
     const local16 = (beat - 4) % 16;
     return { round: r, phase: local16 < 8 ? 'demo' : 'play', local: local16 % 8 };
   },
 
-  buildChart() {
+  // hard：0.5 网格随机节奏型，3~6 个音，首音固定在 0，8 拍窗口内不重复
+  genPattern(rnd) {
+    const len = 3 + Math.floor(rnd() * 4);
+    const pool = [];
+    for (let b = 0.5; b < 8; b += 0.5) pool.push(b);
+    const pat = [0];
+    while (pat.length < len) {
+      pat.push(pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
+    }
+    return pat.sort((a, b) => a - b);
+  },
+
+  buildChart(mode) {
+    let patterns, rounds;
+    if (mode === 'normal') { patterns = this.patternsNormal; rounds = 5; }
+    else if (mode === 'hard') {
+      const rnd = mulberry32(Date.now() % 100000);
+      rounds = 6;
+      patterns = [];
+      for (let r = 0; r < rounds; r++) patterns.push(this.genPattern(rnd));
+    } else { patterns = this.patterns; rounds = 4; }
+    this._cur = { patterns, rounds };
     const notes = [];
-    for (let r = 0; r < 4; r++) {
-      const pat = this.patterns[r];
+    for (let r = 0; r < rounds; r++) {
+      const pat = patterns[r];
       for (let i = 0; i < pat.length; i++) {
         notes.push({ beat: this.roundStart(r) + 8 + pat[i], round: r, idx: i });
       }
@@ -350,7 +420,7 @@ const LevelEcho = {
     // 示范段：演奏节奏型
     const info = this.phaseOf(beat);
     if (info && info.phase === 'demo') {
-      const pat = this.patterns[info.round];
+      const pat = this._cur.patterns[info.round];
       for (let i = 0; i < pat.length; i++) {
         if (this.roundStart(info.round) + pat[i] === beat) {
           AudioEngine.blok(t, this.scale[i % this.scale.length]);
@@ -424,7 +494,7 @@ const LevelEcho = {
     // 当前轮次的示范是否正在发声（老师闪光用）
     let teacherActive = false;
     if (info && info.phase === 'demo') {
-      const pat = this.patterns[info.round];
+      const pat = this._cur.patterns[info.round];
       for (const p of pat) {
         const db = this.roundStart(info.round) + p;
         if (beat >= db && beat - db < 0.22) teacherActive = true;
@@ -456,7 +526,7 @@ const LevelEcho = {
     if (!info) {
       if (beat >= 0 && beat < 4) Draw.text(ctx, '预备…', 480, 250, 34, '#fff');
     } else {
-      Draw.text(ctx, '第 ' + (info.round + 1) + ' / 4 轮', 120, 50, 22, '#8f8ab0', 'left');
+      Draw.text(ctx, '第 ' + (info.round + 1) + ' / ' + this._cur.rounds + ' 轮', 120, 50, 22, '#8f8ab0', 'left');
       if (info.phase === 'demo') {
         Draw.text(ctx, '仔细听…', 480, 250, 34, '#ffd94d');
       } else {
@@ -480,7 +550,7 @@ const LevelEcho = {
       ctx.beginPath(); ctx.arc(px(info.local), y, 7, 0, Math.PI * 2); ctx.fill();
     }
     if (info) {
-      const pat = this.patterns[info.round];
+      const pat = this._cur.patterns[info.round];
       for (let i = 0; i < pat.length; i++) {
         const mx = px(pat[i]);
         let color = 'rgba(255,255,255,0.35)';
@@ -530,14 +600,65 @@ const LevelPong = {
     55, 56, 57, 58
   ],
 
-  buildChart() {
-    return this.playerBeats.map(b => ({ beat: b }));
+  // normal：更多 1 拍间隔快球段与 0.5 间隔连发
+  playerBeatsNormal: [
+    4, 6, 8, 10,
+    12, 13, 14, 15, 16,           // 快速
+    18, 20, 22,
+    24, 24.5, 25, 25.5, 26, 26.5, // 超快连发
+    28, 30, 32, 34,
+    36, 37, 38, 39, 40,           // 快速
+    42, 42.5, 43, 43.5,           // 超快
+    45, 47, 49,
+    51, 52, 53, 54, 55,           // 快速
+    57, 57.5, 58, 58.5, 59, 59.5, // 超快连发
+    61, 63, 65,
+    67, 68, 69, 70,               // 快速
+    72, 73, 74, 75
+  ],
+
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 136, totalBeats: 80 };
+    if (mode === 'hard') return { bpm: 135, totalBeats: 92 };
+    return null; // easy：用静态值
   },
 
-  // 球路事件：电脑发球(beat 2) → 玩家/电脑交替
+  // hard：慢(2 拍)/快(1 拍)/超快(0.5 拍)段由种子随机拼接
+  genHardBeats() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const beats = [];
+    let pos = 4;
+    while (pos < 82) {
+      const k = rnd();
+      if (k < 0.35) {
+        const n = 3 + Math.floor(rnd() * 2);
+        for (let i = 0; i < n; i++) beats.push(pos + i * 2);
+        pos += n * 2 + 1 + Math.floor(rnd() * 2);
+      } else if (k < 0.7) {
+        const n = 3 + Math.floor(rnd() * 3);
+        for (let i = 0; i < n; i++) beats.push(pos + i);
+        pos += n + 1 + Math.floor(rnd() * 2);
+      } else {
+        const n = 4 + Math.floor(rnd() * 3);
+        for (let i = 0; i < n; i++) beats.push(pos + i * 0.5);
+        pos += n * 0.5 + 1.5 + Math.floor(rnd() * 2) * 0.5;
+      }
+    }
+    return beats;
+  },
+
+  buildChart(mode) {
+    const beats = mode === 'normal' ? this.playerBeatsNormal
+      : mode === 'hard' ? this.genHardBeats()
+      : this.playerBeats;
+    this._cur = { playerBeats: beats };
+    return beats.map(b => ({ beat: b }));
+  },
+
+  // 球路事件：电脑发球(beat 2) → 玩家/电脑交替（与当前 playerBeats 同步重新生成）
   buildEvents() {
     const ev = [{ beat: 2, side: 'cpu' }];
-    const pb = this.playerBeats;
+    const pb = this._cur.playerBeats;
     for (let i = 0; i < pb.length; i++) {
       ev.push({ beat: pb[i], side: 'player', idx: i });
       if (i + 1 < pb.length) ev.push({ beat: (pb[i] + pb[i + 1]) / 2, side: 'cpu' });
@@ -574,8 +695,9 @@ const LevelPong = {
     } else {
       game.pong.swingT = st;
       // 快速回球音调更高
-      const i = this.playerBeats.indexOf(note.beat);
-      const gap = i + 1 < this.playerBeats.length ? this.playerBeats[i + 1] - note.beat : 2;
+      const pb = this._cur.playerBeats;
+      const i = pb.indexOf(note.beat);
+      const gap = i + 1 < pb.length ? pb[i + 1] - note.beat : 2;
       AudioEngine.pon(AudioEngine.now(), gap <= 1 ? 1400 : 1150);
       game.burst(this.PX - 52, this.BY, '#c4f56b', 10);
     }

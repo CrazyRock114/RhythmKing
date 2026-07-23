@@ -1,6 +1,6 @@
 /* levels6.js — 第六批关卡：教练指令 & 大团圆混曲
  *   第 19 关 · 拳击台（Ringside）：听教练喊拳路照打 —— 三连击 / 单击 / 按住重拳
- *   第 20 关 · 大团圆 Remix：8 段玩法串烧
+ *   第 21 关 · 大团圆 Remix：8 段玩法串烧
  *     （空手道 / 蓝鸟 / 齐步走正拍 / 乒乓 / 灌油 / 和尚 / 齐步走反拍 / 终章空手道）
  * 关卡接口与 levels.js 相同；长按音符额外实现 onPress / onRelease。
  */
@@ -9,9 +9,12 @@
 /* ================================================================
  * 第 19 关 · 拳击台
  * 教练狗喊拳路，羊驼拳手照打（指令占 1 拍，出拳在指令后 2 拍开始）：
- *   「pa-pa-pow!」= 三连击（+2、+2.5、+3 拍，第三下最重）
- *   「pow!」       = 单击（+2 拍）
- *   「hooold-pow!」= 按住 1 拍重拳（+2 拍按下，蓄满松开）
+ *   「pa-pa-pow!」  = 三连击（+2、+2.5、+3 拍，第三下最重）
+ *   「pa-pa-pa-pow!」= 四连击（+2、+2.5、+3、+3.5 拍，第四下最重，normal 起出现）
+ *   「pow!」        = 单击（+2 拍）
+ *   「hooold-pow!」 = 按住 1 拍重拳（+2 拍按下，蓄满松开）
+ * 三模式：easy=原谱；normal=14 条指令（新增四连拳路），bpm×1.1；
+ * hard=指令与拳路种子随机（combo/single/hold/combo4，间隔随机休止），bpm 125。
  * ============================================================== */
 const LevelRingside = {
   id: 'ringside',
@@ -21,20 +24,63 @@ const LevelRingside = {
   bpm: 115,
   totalBeats: 44,
 
-  // [指令拍, 类型]
+  // [指令拍, 类型]（easy：与原谱一致）
   commands: [
     [4, 'combo'], [8, 'single'], [10, 'combo'], [14, 'hold'],
     [18, 'combo'], [22, 'single'], [24, 'hold'], [28, 'combo'],
     [32, 'single'], [34, 'combo'], [38, 'hold']
   ],
 
-  buildChart() {
+  // normal：14 条指令（easy 的 11 条 + 3 条，新增四连拳路 combo4）
+  commandsNormal: [
+    [4, 'combo'], [8, 'single'], [10, 'combo'], [14, 'hold'],
+    [18, 'combo'], [22, 'single'], [24, 'hold'], [28, 'combo'],
+    [32, 'single'], [34, 'combo'], [38, 'hold'],
+    [44, 'combo4'], [48, 'single'], [54, 'combo4']
+  ],
+
+  setup(mode) {
+    if (mode === 'normal') return { bpm: this.bpm * 1.1, totalBeats: 62 };
+    if (mode === 'hard') return { bpm: 125, totalBeats: 84 };
+    return null; // easy：用静态 bpm / totalBeats
+  },
+
+  // hard：指令与拳路种子随机。先定 16~19 条指令（且至少 12 条多击，保密度下限），
+  // 再在最小 4 拍间隔上随机撒 +2 拍休止（受 76 拍上限约束，指令互不重叠）
+  genHardCommands() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const kinds = ['combo', 'combo', 'combo', 'combo4', 'combo4', 'combo4', 'single', 'single', 'hold'];
+    const count = 16 + Math.floor(rnd() * 4);
+    const maxCheap = count - 12;
+    let slack = 76 - 4 * count;
+    let c = 4, cheap = 0;
+    const cmds = [];
+    for (let i = 0; i < count; i++) {
+      let kind = kinds[Math.floor(rnd() * kinds.length)];
+      if (kind === 'single' || kind === 'hold') {
+        if (cheap >= maxCheap) kind = rnd() < 0.5 ? 'combo' : 'combo4';
+        else cheap++;
+      }
+      cmds.push([c, kind]);
+      let gap = 4;
+      if (slack >= 2 && rnd() < 0.5) { gap = 6; slack -= 2; }
+      c += gap;
+    }
+    return cmds;
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    const commands = mode === 'hard' ? this.genHardCommands()
+      : mode === 'normal' ? this.commandsNormal
+      : this.commands;
+    // 结构化解算：scheduleStep / draw 统一读 this._cur（easy 也走这里）
+    this._cur = { commands, hasCombo4: commands.some(([, k]) => k === 'combo4') };
     const notes = [];
-    for (const [c, kind] of this.commands) {
-      if (kind === 'combo') {
-        notes.push({ beat: c + 2, kind, idx: 0 });
-        notes.push({ beat: c + 2.5, kind, idx: 1 });
-        notes.push({ beat: c + 3, kind, idx: 2 });
+    for (const [c, kind] of commands) {
+      if (kind === 'combo' || kind === 'combo4') {
+        const hits = kind === 'combo' ? [2, 2.5, 3] : [2, 2.5, 3, 3.5];
+        for (let i = 0; i < hits.length; i++) notes.push({ beat: c + hits[i], kind, idx: i });
       } else if (kind === 'single') {
         notes.push({ beat: c + 2, kind });
       } else {
@@ -95,13 +141,14 @@ const LevelRingside = {
     } else {
       AudioEngine.hihat(t, false);
     }
-    // 教练喊拳路（木鱼人声，与伴奏音色区分）
-    for (const [c, kind] of this.commands) {
+    // 教练喊拳路（木鱼人声，与伴奏音色区分；与 _cur 指令表严格对齐）
+    for (const [c, kind] of this._cur.commands) {
       if (beat !== c) continue;
-      if (kind === 'combo') {
+      if (kind === 'combo' || kind === 'combo4') {
         AudioEngine.blok(t, 587);              // pa
         AudioEngine.blok(t + spb * 0.5, 659);  // pa
-        AudioEngine.blok(t + spb, 784);        // pow!
+        if (kind === 'combo4') AudioEngine.blok(t + spb, 698); // pa
+        AudioEngine.blok(t + spb * (kind === 'combo4' ? 1.5 : 1), 784); // pow!
       } else if (kind === 'single') {
         AudioEngine.blok(t, 784);              // pow!
       } else {
@@ -122,8 +169,11 @@ const LevelRingside = {
     if (note.kind === 'hold') return; // 重拳的命中反馈在 onRelease
     r.punchT = st;
     r.swingT = st;
-    // 连击第 3 下是重击（boom），其余普通 punch
-    const big = note.kind === 'combo' && note.idx === 2;
+    // 左右手交替出拳
+    r.lastSide = (r.punches || 0) % 2;
+    r.punches = (r.punches || 0) + 1;
+    // 连击最后一下是重击（boom），其余普通 punch
+    const big = (note.kind === 'combo' && note.idx === 2) || (note.kind === 'combo4' && note.idx === 3);
     r.swingAmp = big ? 0.42 : 0.18;
     if (big) AudioEngine.boom(AudioEngine.now());
     else AudioEngine.punch(AudioEngine.now());
@@ -256,12 +306,12 @@ const LevelRingside = {
     ctx.beginPath(); ctx.ellipse(130, 388 + dbob, 20, 8, 0, Math.PI, 0); ctx.fill();
     ctx.fillRect(110, 386 + dbob, 40, 5);
     let cue = null;
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of this._cur.commands) {
       if (beat >= c && beat < c + 2) { cue = { kind }; break; }
     }
     if (cue) {
-      const txt = cue.kind === 'combo' ? 'pa-pa-pow!' : cue.kind === 'single' ? 'pow!' : 'hooold-pow!';
-      const sub = cue.kind === 'combo' ? '三连击！' : cue.kind === 'single' ? '单击！' : '按住重拳！';
+      const txt = cue.kind === 'combo' ? 'pa-pa-pow!' : cue.kind === 'combo4' ? 'pa-pa-pa-pow!' : cue.kind === 'single' ? 'pow!' : 'hooold-pow!';
+      const sub = cue.kind === 'combo' ? '三连击！' : cue.kind === 'combo4' ? '四连击！' : cue.kind === 'single' ? '单击！' : '按住重拳！';
       const bx = 255, by = 208;
       ctx.fillStyle = '#fff';
       ctx.strokeStyle = '#26232e';
@@ -279,37 +329,46 @@ const LevelRingside = {
       Draw.text(ctx, sub, bx, by + 16, 19, '#555');
     }
 
-    // 羊驼拳手（出拳时开心，失误时沮丧）
+    // 橘猫拳手：平时在沙袋旁游走，出拳时进步贴近，左右手交替（重拳双臂齐出）
     const holding = game.chart.find(n => n.state === 'holding');
-    const abob = Math.sin(beat * Math.PI) * 4;
+    const pt = st - r.punchT;
+    const punching = pt >= 0 && pt < 0.22;
+    const punchK = punching ? Math.sin((pt / 0.22) * Math.PI) : 0;
     let mood = 'idle';
     if (st - r.sadT < 0.7) mood = 'sad';
-    else if (st - r.punchT < 0.3) mood = 'happy';
-    Animals.alpaca(ctx, 330, 392 + abob, 44, {
-      color: '#f0e6d2',
+    else if (pt >= 0 && pt < 0.3) mood = 'happy';
+    // 游走晃动 + 出拳/蓄力时向沙袋进步（不再拉长手臂）
+    const weave = Math.sin(beat * Math.PI) * 10;
+    const stepIn = holding ? 46 : punchK * 46;
+    const bx = 430 + weave + stepIn;
+    const by = 392 + Math.abs(Math.sin(beat * Math.PI * 2)) * 3;
+    const side = holding ? 0 : (r.lastSide === 1 ? -1 : 1);
+    Animals.cat(ctx, bx, by, 40, {
+      color: '#f5a35c',
       mood,
-      stretch: mood === 'happy' ? 0.25 : 0
+      headband: '#e85d5d',
+      squash: holding ? 0.12 : 0,
+      armL: false,
+      armR: false,
+      legPhase: Math.floor(beat * 2) % 2 === 0 ? 1 : -1
     });
-    // 红头带
-    ctx.fillStyle = '#e85d5d';
-    ctx.fillRect(321, 340 + abob, 18, 6);
-    // 拳套：出拳 / 蓄力时伸向沙袋
-    const pt = st - r.punchT;
-    let ext = 0;
-    if (holding) ext = 1;
-    else if (pt >= 0 && pt < 0.25) ext = Math.sin((pt / 0.25) * Math.PI);
-    if (ext > 0) {
-      const gx = 380 + ext * 165;
-      const gy = 330 - ext * 24 + (holding ? Math.sin(st * 30) * 2 : 0);
-      ctx.strokeStyle = '#d9cdb8';
-      ctx.lineWidth = 7;
+    // 拳套（含小臂）：平时收在胸前，出拳时前伸至沙袋
+    const glove = (sd, extended) => {
+      const sx = bx + sd * 24, sy = by - 2;
+      const reach = extended ? 62 : 26;
+      const gx = sx + reach;
+      const gy = sy - (extended ? 4 : 12) + (holding ? Math.sin(st * 30) * 2 : 0);
+      ctx.strokeStyle = '#f5a35c';
+      ctx.lineWidth = 11;
       ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(348, 336 + abob); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(gx - 10, gy + 2); ctx.stroke();
       ctx.fillStyle = '#e85d5d';
-      ctx.beginPath(); ctx.arc(gx, gy, 17, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(gx, gy, 15, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#c62828';
-      ctx.beginPath(); ctx.arc(gx - 6, gy + 6, 9, 0, Math.PI * 2); ctx.fill();
-    }
+      ctx.beginPath(); ctx.arc(gx - 5, gy + 5, 8, 0, Math.PI * 2); ctx.fill();
+    };
+    glove(-1, holding || (side === -1 && punchK > 0));
+    glove(1, holding || (side === 1 && punchK > 0));
     // 命中火星
     if (pt >= 0 && pt < 0.18) {
       const p2 = 1 - pt / 0.18;
@@ -326,14 +385,18 @@ const LevelRingside = {
 
     // 教学提示（开头）
     if (beat >= 0 && beat < 4) {
-      Draw.text(ctx, '听教练喊：pa-pa-pow=三连击 · pow=单击 · hooold-pow=按住重拳！', 480, 150, 25, '#fff');
+      if (this._cur.hasCombo4) {
+        Draw.text(ctx, '听教练喊：pa-pa-pow=三连击 · pa-pa-pa-pow=四连击 · pow=单击 · hooold-pow=按住！', 480, 150, 22, '#fff');
+      } else {
+        Draw.text(ctx, '听教练喊：pa-pa-pow=三连击 · pow=单击 · hooold-pow=按住重拳！', 480, 150, 25, '#fff');
+      }
     }
   }
 };
 
 /* ================================================================
- * 第 20 关 · 大团圆 Remix
- * 8 段混曲串烧（每段 8 拍，段首标题卡 1.5 拍）：
+ * 第 21 关 · 大团圆 Remix
+ * 混曲串烧（每段 8 拍，段首标题卡 1.5 拍）。easy 8 段：
  *   ① 4  空手道：陶罐提前 2 拍从右飞来，到圈时击破
  *   ② 12 蓝鸟：「突突突」三连啄 /「昂——」按住昂首
  *   ③ 20 齐步走·正拍：每拍一步
@@ -342,15 +405,19 @@ const LevelRingside = {
  *   ⑥ 44 和尚：唱数「一！二！三！」后 1 拍吃包子
  *   ⑦ 52 齐步走·反拍：踩后半拍
  *   ⑧ 60 终章·空手道：密集收官
+ * 三模式：easy=原谱 8 段；normal=10 段（插入拍手三人组 / 宇宙射击），bpm×1.1；
+ * hard=10 段、除首尾空手道外中间段落顺序种子随机（段首标题卡同步），bpm 120。
+ * 各段内容由 genStructure 按段起始拍生成，scheduleStep / draw 统一读 this._cur。
  * ============================================================== */
 const LevelRemix = {
   id: 'remix',
-  name: '第 20 关 · 大团圆 Remix',
+  name: '第 21 关 · 大团圆 Remix',
   desc: '全部玩法的混曲串烧！跟紧每一段别掉链子！',
   hint: '空格=全部操作 · 长按段按住 · Esc = 退出',
   bpm: 112,
   totalBeats: 70,
 
+  // easy：原谱 8 段
   sections: [
     { start: 4,  name: '空手道！',      kind: 'karate' },
     { start: 12, name: '蓝鸟！',        kind: 'birds' },
@@ -362,54 +429,121 @@ const LevelRemix = {
     { start: 60, name: '终章·空手道！', kind: 'finale' }
   ],
 
-  birdCmds: [[12, 'peck'], [16, 'stretch']],
-  pongBeats: [28, 30, 32, 33, 34, 35],
-  fillSpecs: [[38, 1], [41, 2]],
-  monkCmds: [[44, 1], [47, 2], [50, 3]],
+  // normal：10 段（插入拍手三人组 / 宇宙射击，各 8 拍，totalBeats 86）
+  sectionsNormal: [
+    { start: 4,  name: '空手道！',      kind: 'karate' },
+    { start: 12, name: '蓝鸟！',        kind: 'birds' },
+    { start: 20, name: '拍手三人组！',  kind: 'clap' },
+    { start: 28, name: '齐步走！',      kind: 'marchOn' },
+    { start: 36, name: '乒乓！',        kind: 'pong' },
+    { start: 44, name: '灌油！',        kind: 'fill' },
+    { start: 52, name: '吃包子！',      kind: 'monk' },
+    { start: 60, name: '宇宙射击！',    kind: 'shoot' },
+    { start: 68, name: '反拍齐步走！',  kind: 'marchOff' },
+    { start: 76, name: '终章·空手道！', kind: 'finale' }
+  ],
 
-  buildChart() {
+  setup(mode) {
+    if (mode === 'normal') return { bpm: this.bpm * 1.1, totalBeats: 86 };
+    if (mode === 'hard') return { bpm: 120, totalBeats: 86 };
+    return null; // easy：用静态 bpm / totalBeats
+  },
+
+  // hard：除首尾空手道外，中间 8 段顺序种子随机（每段 8 拍，重新编号 start）
+  shuffledSections() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const src = this.sectionsNormal;
+    const mid = src.slice(1, -1).map(s => ({ name: s.name, kind: s.kind }));
+    for (let i = mid.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const tmp = mid[i]; mid[i] = mid[j]; mid[j] = tmp;
+    }
+    const sections = [{ name: src[0].name, kind: src[0].kind }, ...mid, { name: src[src.length - 1].name, kind: src[src.length - 1].kind }];
+    sections.forEach((s, i) => { s.start = 4 + i * 8; });
+    return sections;
+  },
+
+  // 按段落表生成全部结构数据（音符 + 各玩法指令表），内容只依赖段起始拍
+  genStructure(sections) {
     const notes = [];
     const push = (beat, kind, extra) => notes.push(Object.assign({ beat, kind }, extra));
-    // ① 空手道
-    for (const b of [4, 5, 6, 7, 8, 8.5, 9, 10]) push(b, 'karate');
-    // ② 蓝鸟
-    for (const [c, k] of this.birdCmds) {
-      if (k === 'peck') {
-        push(c + 2, 'peck');
-        push(c + 2.5, 'peck');
-        push(c + 3, 'peck');
-      } else {
-        push(c + 2, 'stretch', { dur: 1 });
+    const birdCmds = [], pongBeats = [], fillSpecs = [], monkCmds = [], clapGroups = [];
+    for (const s of sections) {
+      const b0 = s.start;
+      switch (s.kind) {
+        case 'karate':
+          for (const off of [0, 1, 2, 3, 4, 4.5, 5, 6]) push(b0 + off, 'karate');
+          break;
+        case 'finale':
+          for (const off of [0, 1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7]) push(b0 + off, 'finale');
+          break;
+        case 'birds':
+          birdCmds.push([b0, 'peck'], [b0 + 4, 'stretch']);
+          push(b0 + 2, 'peck');
+          push(b0 + 2.5, 'peck');
+          push(b0 + 3, 'peck');
+          push(b0 + 6, 'stretch', { dur: 1 });
+          break;
+        case 'marchOn':
+          for (let b = 0; b < 8; b++) push(b0 + b, 'marchOn');
+          break;
+        case 'marchOff':
+          for (let b = 0; b < 8; b++) push(b0 + b + 0.5, 'marchOff');
+          break;
+        case 'pong':
+          for (const off of [0, 2, 4, 5, 6, 7]) { pongBeats.push(b0 + off); push(b0 + off, 'pong'); }
+          break;
+        case 'fill':
+          fillSpecs.push([b0 + 2, 1], [b0 + 5, 2]);
+          push(b0 + 2, 'fill', { dur: 1 });
+          push(b0 + 5, 'fill', { dur: 2 });
+          break;
+        case 'monk':
+          monkCmds.push([b0, 1], [b0 + 3, 2], [b0 + 6, 3]);
+          push(b0 + 1, 'monk', { num: 1, cueBeat: b0 });
+          push(b0 + 4, 'monk', { num: 2, cueBeat: b0 + 3 });
+          push(b0 + 7, 'monk', { num: 3, cueBeat: b0 + 6 });
+          break;
+        case 'clap':
+          // 同伴示范两声（间隔 gap），玩家隔同样时间补第三声
+          for (const [c, gap] of [[b0, 1], [b0 + 3, 1], [b0 + 6, 0.5]]) {
+            clapGroups.push([c, gap]);
+            push(c + 2 * gap, 'clap', { head: c, gap });
+          }
+          break;
+        case 'shoot':
+          // 警报提前 2 拍，敌人到准星瞬间射击（含一组双连）
+          for (const off of [1, 3, 5, 5.5, 7]) push(b0 + off, 'shoot');
+          break;
       }
     }
-    // ③ 齐步走·正拍
-    for (let b = 20; b < 28; b++) push(b, 'marchOn');
-    // ④ 乒乓
-    for (const b of this.pongBeats) push(b, 'pong');
-    // ⑤ 灌油
-    for (const [b, d] of this.fillSpecs) push(b, 'fill', { dur: d });
-    // ⑥ 和尚：唱数后 1 拍吃包子
-    for (const [c, n] of this.monkCmds) push(c + 1, 'monk', { num: n, cueBeat: c });
-    // ⑦ 齐步走·反拍
-    for (let b = 52.5; b < 60; b++) push(b, 'marchOff');
-    // ⑧ 终章·空手道
-    for (const b of [60, 61, 62, 62.5, 63, 64, 65, 65.5, 66, 66.5, 67]) push(b, 'finale');
-    return notes;
+    return { sections, notes, birdCmds, pongBeats, fillSpecs, monkCmds, clapGroups };
+  },
+
+  buildChart(mode) {
+    mode = mode || 'easy';
+    const sections = mode === 'hard' ? this.shuffledSections()
+      : mode === 'normal' ? this.sectionsNormal
+      : this.sections;
+    // 结构化解算：scheduleStep / draw 统一读 this._cur（easy 也走这里）
+    this._cur = this.genStructure(sections);
+    return this._cur.notes;
   },
 
   // 当前拍所在的段（窗口为 [start, 下一段 start)，结尾归入终章）
   sectionAt(beat) {
     let cur = null;
-    for (const s of this.sections) {
+    for (const s of this._cur.sections) {
       if (beat >= s.start) cur = s;
     }
     return cur;
   },
 
-  // 乒乓球路：电脑发球(27) → 玩家/电脑交替
+  // 乒乓球路：电脑提前 1 拍发球 → 玩家/电脑交替
   buildPongEvents() {
-    const ev = [{ beat: 27, side: 'cpu' }];
-    const pb = this.pongBeats;
+    const sec = this._cur.sections.find(s => s.kind === 'pong');
+    const ev = [{ beat: sec.start - 1, side: 'cpu' }];
+    const pb = this._cur.pongBeats;
     for (let i = 0; i < pb.length; i++) {
       ev.push({ beat: pb[i], side: 'player' });
       if (i + 1 < pb.length) ev.push({ beat: (pb[i] + pb[i + 1]) / 2, side: 'cpu' });
@@ -421,6 +555,7 @@ const LevelRemix = {
     game.remix = {
       happyT: -9, sadT: -9, hitT: -9, stepT: -9,
       holdT: -9, stretchT: -9, swingT: -9,
+      clapT: -9, laserT: -9, laserX: 0,
       events: this.buildPongEvents()
     };
   },
@@ -459,9 +594,11 @@ const LevelRemix = {
         if (n.beat === beat) AudioEngine.blok(t, 1568);
         if (n.beat + n.dur === beat) AudioEngine.blok(t, 2093);
       }
+      // 宇宙射击：敌人到准星前 2 拍警报
+      if (n.kind === 'shoot' && (n.beat - 2) * 2 === step) AudioEngine.blok(t, 1175);
     }
     // 蓝鸟：队长唱指令 + 同伴示范（简化自第 6 关）
-    for (const [c, kind] of this.birdCmds) {
+    for (const [c, kind] of this._cur.birdCmds) {
       if (kind === 'peck') {
         if (beat === c) { AudioEngine.blok(t, 587); AudioEngine.blok(t + spb * 0.5, 587); }
         if (beat === c + 1) AudioEngine.blok(t, 784);
@@ -479,8 +616,12 @@ const LevelRemix = {
       if (ev.side === 'cpu' && ev.beat === beat) AudioEngine.pon(t, 880);
     }
     // 和尚：唱数「一！二！三！」（音高递增）
-    for (const [c, num] of this.monkCmds) {
+    for (const [c, num] of this._cur.monkCmds) {
       if (beat === c) AudioEngine.blok(t, [523.25, 587.33, 659.25][num - 1]);
+    }
+    // 拍手三人组：同伴示范两声（玩家的第三声不预排，由玩家自己拍）
+    for (const [c, gap] of this._cur.clapGroups) {
+      if (beat === c || beat === c + gap) AudioEngine.clap(t);
     }
   },
 
@@ -516,8 +657,8 @@ const LevelRemix = {
         break;
       case 'pong': {
         r.swingT = st;
-        const i = this.pongBeats.indexOf(note.beat);
-        const gap = i + 1 < this.pongBeats.length ? this.pongBeats[i + 1] - note.beat : 2;
+        const i = this._cur.pongBeats.indexOf(note.beat);
+        const gap = i + 1 < this._cur.pongBeats.length ? this._cur.pongBeats[i + 1] - note.beat : 2;
         AudioEngine.pon(now, gap <= 1 ? 1400 : 1150);
         game.burst(748, 330, '#c4f56b', 10);
         break;
@@ -526,6 +667,19 @@ const LevelRemix = {
         note.eatenT = st;
         AudioEngine.chomp(now);
         game.burst(352, 336, '#ffd9a0', 8);
+        break;
+      case 'clap':
+        r.clapT = st;
+        AudioEngine.clap(now); // 拍中了：第三声融入节奏
+        game.burst(680, 372, '#ffffff', 8);
+        break;
+      case 'shoot':
+        r.laserT = st;
+        r.laserX = 260; // 准星 x（与 sceneShoot 的 AIMX 一致）
+        AudioEngine.zap(now);
+        AudioEngine.boom(now);
+        game.burst(260, 300, '#ff9a3d', 16);
+        game.burst(260, 300, '#8be04e', 8);
         break;
       // fill / stretch 的命中反馈在 onRelease
     }
@@ -578,6 +732,9 @@ const LevelRemix = {
     r.hitT = st;   // 空手道/蓝鸟的空气动作
     r.swingT = st; // 乒乓挥空拍
     r.sadT = st;
+    r.clapT = st;  // 拍手：照样抬手（动作反馈）
+    r.laserT = st; // 射击：激光射向深空
+    r.laserX = 1000;
   },
 
   draw(game, ctx) {
@@ -594,6 +751,8 @@ const LevelRemix = {
         case 'pong': this.scenePong(ctx, game); break;
         case 'fill': this.sceneFill(ctx, game); break;
         case 'monk': this.sceneMonk(ctx, game); break;
+        case 'clap': this.sceneClap(ctx, game); break;
+        case 'shoot': this.sceneShoot(ctx, game); break;
       }
     }
     // 段首标题卡（1.5 拍，弹跳入场 + 淡出）
@@ -774,7 +933,7 @@ const LevelRemix = {
 
     // 队长（左边高台 + 礼帽）
     let singing = false;
-    for (const [c] of this.birdCmds) {
+    for (const [c] of this._cur.birdCmds) {
       if (beat >= c && beat < c + 1.05) singing = true;
     }
     ctx.fillStyle = '#8d6e63';
@@ -788,7 +947,7 @@ const LevelRemix = {
     ctx.fillRect(128, 244 + cbob, 24, 26);
     // 指令气泡
     let cue = null;
-    for (const [c, kind] of this.birdCmds) {
+    for (const [c, kind] of this._cur.birdCmds) {
       if (beat >= c && beat < c + 2) { cue = { kind }; break; }
     }
     if (cue) {
@@ -813,7 +972,7 @@ const LevelRemix = {
     for (let i = 0; i < 2; i++) {
       const x = 400 + i * 150;
       let pose = 'idle';
-      for (const [c, kind] of this.birdCmds) {
+      for (const [c, kind] of this._cur.birdCmds) {
         if (kind === 'peck' && beat >= c + 2 && beat < c + 3.3) pose = 'peck';
         if (kind === 'stretch' && beat >= c + 2 && beat < c + 3.2) pose = 'stretch';
       }
@@ -1228,7 +1387,7 @@ const LevelRemix = {
     ctx.fillRect(324, 328, 32, 5);
     // 唱数气泡
     const nums = ['一', '二', '三'];
-    for (const [c, num] of this.monkCmds) {
+    for (const [c, num] of this._cur.monkCmds) {
       if (beat >= c && beat < c + 1) {
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = '#26232e';
@@ -1271,6 +1430,172 @@ const LevelRemix = {
       }
       ctx.restore();
     }
+  },
+
+  /* ---------- 拍手三人组（normal 起加入，简化自第 7 关） ---------- */
+  sceneClap(ctx, game) {
+    const st = Conductor.songTime();
+    const beat = Conductor.songBeat();
+    const r = game.remix;
+    const CATX = [280, 480, 680], CATY = 392;
+    // 背景：深蓝剧场 + 幕布
+    const bg = ctx.createLinearGradient(0, 0, 0, 540);
+    bg.addColorStop(0, '#2c2350');
+    bg.addColorStop(1, '#191430');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 960, 540);
+    Draw.ground(ctx, 430, '#8a5a3b');
+    ctx.fillStyle = '#8e2434';
+    ctx.fillRect(0, 0, 960, 26);
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath(); ctx.arc(i * 87 + 24, 26, 26, 0, Math.PI); ctx.fill();
+    }
+    // 观众剪影（随节拍摇晃）
+    for (let i = 0; i < 9; i++) {
+      const ab = Math.sin(beat * Math.PI + i * 1.3) * 3;
+      ctx.fillStyle = '#0f0c1c';
+      ctx.beginPath(); ctx.arc(i * 116 + 40, 528 + ab, 24, 0, Math.PI * 2); ctx.fill();
+    }
+    // 同伴拍手状态（按拍比较，与排程严格一致）：组内第一声→猫0，第二声→猫1
+    let clap0 = false, clap1 = false;
+    for (const [c, gap] of this._cur.clapGroups) {
+      if (beat >= c && beat < c + 0.3) clap0 = true;
+      if (beat >= c + gap && beat < c + gap + 0.3) clap1 = true;
+    }
+    const clapP = st - r.clapT < 0.28;
+    const allSad = st - r.sadT < 0.7;
+    // 三只猫：谁拍手谁双臂举起 + 爪间闪光（最右是玩家）
+    for (let i = 0; i < 3; i++) {
+      const isP = i === 2;
+      const clapping = isP ? clapP : (i === 0 ? clap0 : clap1);
+      let mood = 'idle';
+      if (allSad) mood = 'sad';
+      else if (clapping || (isP && st - r.happyT < 0.4)) mood = 'happy';
+      const bob = Math.sin(beat * Math.PI + i * 0.8) * 4;
+      Animals.cat(ctx, CATX[i], CATY + bob, isP ? 42 : 38, {
+        color: isP ? '#ff9a3d' : '#8fa3b8',
+        mood,
+        armL: clapping ? -2.4 : 0.6,
+        armR: clapping ? -2.4 : 0.6,
+        squash: clapping ? 0.1 : 0
+      });
+      if (clapping) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        const fy = CATY + bob - 20;
+        for (let a = 0; a < 5; a++) {
+          const ang = -Math.PI / 2 + (a - 2) * 0.55;
+          ctx.beginPath();
+          ctx.moveTo(CATX[i] + Math.cos(ang) * 30, fy + Math.sin(ang) * 30);
+          ctx.lineTo(CATX[i] + Math.cos(ang) * 42, fy + Math.sin(ang) * 42);
+          ctx.stroke();
+        }
+      }
+    }
+    Draw.text(ctx, '▼ 你', CATX[2], CATY + 66, 22, '#c62828');
+    Draw.text(ctx, '听两声拍手，隔同样时间补第三声！', 480, 120, 26, 'rgba(255,255,255,0.9)');
+  },
+
+  /* ---------- 宇宙射击（normal 起加入，简化自第 10 关） ---------- */
+  sceneShoot(ctx, game) {
+    const st = Conductor.songTime();
+    const beat = Conductor.songBeat();
+    const r = game.remix;
+    const SHIPX = 140, SHIPY = 300, AIMX = 260;
+    // 背景：深空 + 向后流动的星野
+    const bg = ctx.createLinearGradient(0, 0, 0, 540);
+    bg.addColorStop(0, '#0a0d28');
+    bg.addColorStop(1, '#1c1440');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 960, 540);
+    for (let i = 0; i < 80; i++) {
+      const sx = 960 - ((i * 173 + st * 60) % 1000);
+      const sy = (i * 97 + 29) % 540;
+      const tw = 0.3 + 0.7 * Math.abs(Math.sin(st * 2 + i * 0.7));
+      ctx.fillStyle = 'rgba(255,255,255,' + (tw * 0.8).toFixed(3) + ')';
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    ctx.fillStyle = '#3d5a9e';
+    ctx.beginPath(); ctx.arc(790, 110, 34, 0, Math.PI * 2); ctx.fill();
+    // 警报视觉（听觉为主，画面仅确认）：右缘红「!」闪烁
+    for (const n of game.chart) {
+      if (n.kind === 'shoot' && beat >= n.beat - 2 && beat < n.beat - 1.7 && Math.floor(st * 8) % 2 === 0) {
+        Draw.text(ctx, '!', 928, SHIPY, 40, '#ff5a5a');
+      }
+    }
+    // 准星（随节拍脉动）
+    const pulse = 1 + 0.1 * Math.max(0, Math.sin(beat * Math.PI));
+    ctx.strokeStyle = 'rgba(125,227,139,0.9)';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(AIMX, SHIPY, 26 * pulse, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(AIMX, SHIPY, 10 * pulse, 0, Math.PI * 2); ctx.stroke();
+    // 猫咪战机（飞碟 + 引擎焰 + 座舱里的猫）
+    const bobY = Math.sin(st * 2) * 5;
+    const fl = 12 + Math.sin(st * 30) * 5;
+    ctx.fillStyle = '#ffb347';
+    ctx.beginPath();
+    ctx.moveTo(SHIPX - 46, SHIPY + 16 + bobY);
+    ctx.lineTo(SHIPX - 46 - fl, SHIPY + 24 + bobY);
+    ctx.lineTo(SHIPX - 46, SHIPY + 32 + bobY);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#9fb2c8';
+    ctx.beginPath(); ctx.ellipse(SHIPX, SHIPY + 24 + bobY, 48, 15, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7c8da3';
+    ctx.beginPath(); ctx.ellipse(SHIPX, SHIPY + 26 + bobY, 48, 13, 0, 0, Math.PI); ctx.fill();
+    let mood = 'idle';
+    if (st - r.sadT < 0.6) mood = 'sad';
+    else if (st - r.hitT < 0.3) mood = 'happy';
+    Animals.cat(ctx, SHIPX, SHIPY - 2 + bobY, 17, { color: '#f5a35c', mood, armL: 0.5, armR: 0.5 });
+    ctx.fillStyle = 'rgba(180,230,255,0.28)';
+    ctx.beginPath(); ctx.arc(SHIPX, SHIPY + 6 + bobY, 36, Math.PI, 0); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(180,230,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // 激光束（命中到准星，挥空射向深空）
+    const lt = st - r.laserT;
+    if (lt >= 0 && lt < 0.14) {
+      ctx.save();
+      ctx.globalAlpha = 1 - lt / 0.14;
+      ctx.strokeStyle = 'rgba(139,233,253,0.6)';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(SHIPX + 46, SHIPY + 12 + bobY);
+      ctx.lineTo(r.laserX, SHIPY);
+      ctx.stroke();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(SHIPX + 46, SHIPY + 12 + bobY);
+      ctx.lineTo(r.laserX, SHIPY);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // 敌人：圆胖外星人，警报后 2 拍到准星；漏掉的从战机旁飞走
+    for (const n of game.chart) {
+      if (n.kind !== 'shoot' || n.state === 'hit') continue;
+      const launch = n.beat - 2;
+      if (beat < launch) continue;
+      const p = (beat - launch) / 2;
+      if (p > 1.45) continue;
+      const x = 1000 - (1000 - AIMX) * p;
+      const y = SHIPY + Math.sin((beat + n.beat) * Math.PI) * 5;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(st * 3 + n.beat);
+      if (n.state === 'miss') ctx.globalAlpha = Math.max(0, 1 - (p - 1) * 2.5);
+      const body = n.state === 'miss' ? '#6b7a4a' : '#8be04e';
+      ctx.fillStyle = body;
+      ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+      Animals.eye(ctx, 0, 0, 8, 'idle');
+      ctx.strokeStyle = body;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(0, -30); ctx.stroke();
+      ctx.fillStyle = '#ff5a5a';
+      ctx.beginPath(); ctx.arc(0, -33, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    Draw.text(ctx, '警报响后 2 拍，敌人到准星——射击！', 480, 56, 24, 'rgba(255,255,255,0.9)');
   }
 };
 

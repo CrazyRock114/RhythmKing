@@ -26,29 +26,77 @@ const LevelMarch = {
     [40, 48, 'off'],
     [52, 60, 'on']
   ],
-  // 休息演示段：[起始拍, 演示的模式]（各 4 拍，玩家休息，全队演示下一段节奏）
+  // 休息演示段：[起始拍, 演示的模式, 长度(拍, 缺省 4)]（玩家休息，全队演示下一段节奏）
   gaps: [
     [12, 'off'], [24, 'on'], [36, 'off'], [48, 'on']
   ],
+  // normal：7 段，正反切换更频繁，最后一小段加长
+  blocksNormal: [
+    [4, 12, 'on'], [16, 24, 'off'], [28, 36, 'on'], [40, 48, 'off'],
+    [52, 60, 'on'], [64, 72, 'off'], [76, 86, 'on']
+  ],
+  gapsNormal: [
+    [12, 'off'], [24, 'on'], [36, 'off'], [48, 'on'], [60, 'off'], [72, 'on']
+  ],
 
-  buildChart() {
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 123, totalBeats: 88 };
+    if (mode === 'hard') return { bpm: 125, totalBeats: 72 };
+    return null; // easy：用静态值
+  },
+
+  // hard：段数(5~7)、段长(6~10 拍)、正/反顺序与休息长度(3~4 拍)均由种子随机
+  genHardBlocks() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const END = 70; // 最后一段结束不晚于第 70 拍
+    const lens = [], modes = [], gapLens = [];
+    let s = 4;
+    while (END - s >= 6) {
+      const len = Math.min(10, 6 + Math.floor(rnd() * 5), END - s);
+      lens.push(len);
+      modes.push(rnd() < 0.5 ? 'on' : 'off');
+      s += len;
+      if (END - s < 9) break; // 放不下「休息(≥3 拍)+下一段(≥6 拍)」就收尾
+      const g = 3 + Math.floor(rnd() * 2);
+      gapLens.push(g);
+      s += g;
+    }
+    const blocks = [], gaps = [];
+    let b = 4;
+    for (let i = 0; i < lens.length; i++) {
+      blocks.push([b, b + lens[i], modes[i]]);
+      if (i + 1 < lens.length) {
+        gaps.push([b + lens[i], modes[i + 1], gapLens[i]]);
+        b += lens[i] + gapLens[i];
+      }
+    }
+    return { blocks, gaps };
+  },
+
+  buildChart(mode) {
+    let blocks, gaps;
+    if (mode === 'normal') { blocks = this.blocksNormal; gaps = this.gapsNormal; }
+    else if (mode === 'hard') { const h = this.genHardBlocks(); blocks = h.blocks; gaps = h.gaps; }
+    else { blocks = this.blocks; gaps = this.gaps; }
+    this._cur = { blocks, gaps };
     const beats = [];
-    for (const [s, e, mode] of this.blocks) {
-      for (let b = s; b < e; b++) beats.push(mode === 'on' ? b : b + 0.5);
+    for (const [s, e, m] of blocks) {
+      for (let b = s; b < e; b++) beats.push(m === 'on' ? b : b + 0.5);
     }
     return beats.map(b => ({ beat: b }));
   },
 
   modeAt(beat) {
-    for (const [s, e, mode] of this.blocks) {
+    for (const [s, e, mode] of this._cur.blocks) {
       if (beat >= s && beat < e) return mode;
     }
     return null;
   },
 
   gapAt(beat) {
-    for (const [s, mode] of this.gaps) {
-      if (beat >= s && beat < s + 4) return { start: s, mode };
+    for (const [s, mode, glen] of this._cur.gaps) {
+      const gl = glen || 4;
+      if (beat >= s && beat < s + gl) return { start: s, mode, len: gl };
     }
     return null;
   },
@@ -105,22 +153,23 @@ const LevelMarch = {
     }
 
     // —— 段落边界信号 ——
-    for (const [gs, gmode] of this.gaps) {
+    for (const [gs, gmode, glen] of this._cur.gaps) {
+      const gl = glen || 4;
       // 休息开始：哨声「停！」
       if (beat === gs) AudioEngine.whistle(t);
-      // 休息段内：全队演示下一段节奏
-      if (beat > gs && beat < gs + 3) {
+      // 休息段内：全队演示下一段节奏（最后 1 拍留给预备口令）
+      if (beat > gs && beat < gs + gl - 1) {
         if (gmode === 'off' && beat % 1 === 0.5) AudioEngine.blok(t, 880);
         if (gmode === 'on' && step % 2 === 0) AudioEngine.blok(t, 587);
       }
       // 预备口令：休息段最后 1 拍「哒-哒」
-      if (beat === gs + 3) {
+      if (beat === gs + gl - 1) {
         AudioEngine.blok(t, 660);
         AudioEngine.blok(t + spb * 0.5, 660);
       }
     }
     // 跟踩段开始：重音「起！」
-    for (const [bs] of this.blocks) {
+    for (const [bs] of this._cur.blocks) {
       if (beat === bs && bs > 4) {
         AudioEngine.kick(t);
         AudioEngine.snare(t);
@@ -202,9 +251,9 @@ const LevelMarch = {
     // 休息段公告 + 悬浮音符演示（♪ 亮起的顺序就是下一段的节奏）
     if (gap) {
       const demoBeats = [];
-      if (gap.mode === 'off') for (const off of [0.5, 1.5, 2.5]) demoBeats.push(gap.start + off);
-      else for (const off of [1, 2]) demoBeats.push(gap.start + off);
-      const remain = gap.start + 4 - beat;
+      if (gap.mode === 'off') for (const off of [0.5, 1.5, 2.5]) { if (off < gap.len - 1) demoBeats.push(gap.start + off); }
+      else for (const off of [1, 2]) { if (off < gap.len - 1) demoBeats.push(gap.start + off); }
+      const remain = gap.start + gap.len - beat;
       if (remain <= 1) {
         Draw.text(ctx, '预备…', 480, 190, 40, '#e85d5d');
       } else {
@@ -219,7 +268,7 @@ const LevelMarch = {
       }
     } else if (mode) {
       // 跟踩段开头：「开始！」
-      for (const [bs] of this.blocks) {
+      for (const [bs] of this._cur.blocks) {
         if (bs > 4 && beat >= bs && beat < bs + 1) {
           Draw.text(ctx, '开始！', 480, 190, 44, '#e85d5d');
         }
@@ -296,9 +345,38 @@ const LevelFill = {
     [4, 1], [7, 1], [10, 2], [14, 1], [17, 2], [21, 3],
     [26, 2], [29, 1], [32, 2], [36, 3], [41, 2], [44, 1]
   ],
+  // normal：16 台，加入 1.5 拍时长与混合编排（相邻间隔 ≥ dur + 2）
+  specsNormal: [
+    [4, 1], [7, 1.5], [10.5, 1], [13.5, 2], [17.5, 1.5], [21, 2], [25, 3],
+    [30, 1.5], [33.5, 1], [36.5, 2], [40.5, 1.5], [44, 3], [49, 2], [53, 1],
+    [56, 1.5], [59.5, 3]
+  ],
 
-  buildChart() {
-    return this.specs.map(([b, d]) => ({ beat: b, dur: d }));
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 106, totalBeats: 68 };
+    if (mode === 'hard') return { bpm: 108, totalBeats: 78 };
+    return null; // easy：用静态值
+  },
+
+  // hard：到位拍与时长由种子随机（dur ∈ {1,1.5,2,3}，相邻间隔 ≥ dur + 2）
+  genHardSpecs() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const durs = [1, 1.5, 2, 3];
+    const specs = [];
+    let pos = 4;
+    while (pos < 72) {
+      const d = durs[Math.floor(rnd() * durs.length)];
+      specs.push([pos, d]);
+      pos += d + 2 + Math.floor(rnd() * 2);
+    }
+    return specs;
+  },
+
+  buildChart(mode) {
+    const specs = mode === 'normal' ? this.specsNormal
+      : mode === 'hard' ? this.genHardSpecs()
+      : this.specs;
+    return specs.map(([b, d]) => ({ beat: b, dur: d }));
   },
 
   init(game) {
@@ -546,9 +624,37 @@ const LevelBirds = {
     [46, 'peck'], [50, 'stretch']
   ],
 
-  buildChart() {
+  // normal：16 条指令，允许相邻间隔 3 拍
+  commandsNormal: [
+    [4, 'peck'], [9, 'stretch'], [12, 'peck'], [17, 'peck'], [21, 'stretch'],
+    [26, 'peck'], [29, 'peck'], [34, 'stretch'], [39, 'peck'], [43, 'peck'],
+    [48, 'stretch'], [53, 'peck'], [58, 'peck'], [63, 'stretch'], [68, 'peck'],
+    [73, 'stretch']
+  ],
+
+  setup(mode) {
+    if (mode === 'normal') return { bpm: 130, totalBeats: 79 };
+    if (mode === 'hard') return { bpm: 128, totalBeats: 74 };
+    return null; // easy：用静态值
+  },
+
+  // hard：指令序列与类型由种子随机（peck:stretch ≈ 6:4，最小间隔 4 拍）
+  genHardCommands() {
+    const rnd = mulberry32(Date.now() % 100000);
+    const commands = [];
+    for (let c = 4; c <= 68; c += 4 + Math.floor(rnd() * 2)) {
+      commands.push([c, rnd() < 0.6 ? 'peck' : 'stretch']);
+    }
+    return commands;
+  },
+
+  buildChart(mode) {
+    const commands = mode === 'normal' ? this.commandsNormal
+      : mode === 'hard' ? this.genHardCommands()
+      : this.commands;
+    this._cur = { commands };
     const notes = [];
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of commands) {
       if (kind === 'peck') {
         // 啄米固定节奏型：三连啄（半拍一下）
         notes.push({ beat: c + 2, kind });
@@ -579,7 +685,7 @@ const LevelBirds = {
     } else {
       AudioEngine.hihat(t, false);
     }
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of this._cur.commands) {
       if (kind === 'peck') {
         // 队长唱「突！突！突！」
         if (beat === c) { AudioEngine.blok(t, 587); AudioEngine.blok(t + spb * 0.5, 587); }
@@ -668,12 +774,12 @@ const LevelBirds = {
 
     // 当前指令（指令拍 ~ 回应开始前）
     let cue = null;
-    for (const [c, kind] of this.commands) {
+    for (const [c, kind] of this._cur.commands) {
       if (beat >= c && beat < c + 2) { cue = { kind, beat: c }; break; }
     }
     // 队长张嘴唱指令的时刻（指令的 1 拍内）
     let singing = false;
-    for (const [c] of this.commands) {
+    for (const [c] of this._cur.commands) {
       if (beat >= c && beat < c + 1.05) singing = true;
     }
 
@@ -718,7 +824,7 @@ const LevelBirds = {
     for (let i = 0; i < 2; i++) {
       const x = 400 + i * 150;
       let pose = 'idle';
-      for (const [c, kind] of this.commands) {
+      for (const [c, kind] of this._cur.commands) {
         if (kind === 'peck' && beat >= c + 2 && beat < c + 3.3) pose = 'peck';
         if (kind === 'stretch' && beat >= c + 2 && beat < c + 3.2) pose = 'stretch';
       }

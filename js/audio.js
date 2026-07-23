@@ -213,10 +213,11 @@ const AudioEngine = {
     this.blok(t + 0.09, 1318);
   },
 
-  // 哨声（段落停止信号）
-  whistle(t) {
-    this.tone(t, 2093, 0.12, 'sine', 0.28);
-    this.tone(t + 0.14, 1568, 0.22, 'sine', 0.28);
+  // 哨声（段落停止信号；low=true 为低音假哨声）
+  whistle(t, low) {
+    const p = low ? 1318 : 2093;
+    this.tone(t, p, 0.12, 'sine', 0.28);
+    this.tone(t + 0.14, p * 0.75, 0.22, 'sine', 0.28);
   },
 
   /* ---------- 第三批关卡专用 ---------- */

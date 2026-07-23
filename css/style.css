@@ -91,6 +91,57 @@ h2 {
 
 .btn-row { margin-top: 24px; }
 
+/* ---------- 难度选择 ---------- */
+.btn-diff { min-width: 130px; font-size: 22px; padding: 16px 26px; }
+.btn-diff.easy { background: linear-gradient(#a8e6a1, #7de38b); box-shadow: 0 4px 0 #4a9e56; }
+.btn-diff.normal { background: linear-gradient(#ffe27a, #ffc93c); box-shadow: 0 4px 0 #c77e1b; }
+.btn-diff.hard { background: linear-gradient(#ff9a8a, #e85d5d); box-shadow: 0 4px 0 #a13030; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.btn-diff:active { box-shadow: 0 1px 0 rgba(0,0,0,0.3); }
+#diff-best { margin-top: 16px; font-size: 15px; color: #7de38b; min-height: 22px; }
+#btn-diff-back { margin-top: 22px; }
+#result-mode { font-size: 15px; color: #8f8ab0; letter-spacing: 2px; margin-bottom: 10px; }
+
+/* ---------- 移动端适配 ---------- */
+#game-canvas {
+  -webkit-touch-callout: none;
+}
+
+/* 竖屏时提示旋转设备（仅小屏设备显示） */
+#rotate-hint {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(16, 14, 28, 0.96);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  color: #ffd94d;
+  font-size: 22px;
+  text-align: center;
+  padding: 30px;
+}
+#rotate-hint .icon { font-size: 64px; margin-bottom: 18px; }
+@media (orientation: portrait) and (max-width: 900px) {
+  #rotate-hint { display: flex; }
+}
+
+/* 双键关的触屏左右分区提示 */
+#zone-left, #zone-right {
+  position: absolute;
+  bottom: 44px;
+  z-index: 6;
+  font-size: 15px;
+  color: rgba(255,255,255,0.75);
+  background: rgba(0,0,0,0.25);
+  border: 2px dashed rgba(255,255,255,0.4);
+  border-radius: 12px;
+  padding: 10px 20px;
+  pointer-events: none;
+}
+#zone-left { left: 26px; }
+#zone-right { right: 26px; }
+
 /* ---------- 选关卡片 ---------- */
 #screen-select .panel {
   max-height: 92vh;
