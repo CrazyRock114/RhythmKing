@@ -24,8 +24,19 @@ const Main = {
   init() {
     this.canvas = document.getElementById('game-canvas');
     this.ctx = this.canvas.getContext('2d');
+    document.body.classList.toggle('is-touch', this.isTouch);
     this.fitCanvas();
     window.addEventListener('resize', () => this.fitCanvas());
+
+    // 横屏提示的两个选择：强制横屏（CSS 旋转）/ 竖屏继续
+    document.getElementById('btn-force-landscape').addEventListener('click', () => {
+      document.body.classList.add('force-landscape');
+      this.fitCanvas();
+    });
+    document.getElementById('btn-portrait-continue').addEventListener('click', () => {
+      document.body.classList.add('allow-portrait');
+      this.fitCanvas();
+    });
 
     // 浏览器自动播放策略：必须在用户手势后创建/恢复 AudioContext
     const unlock = () => { AudioEngine.init(); AudioEngine.resume(); };
@@ -81,7 +92,12 @@ const Main = {
       // 双键关的触屏分区：左半屏 = 副键(F)，右半屏 = 主键(空格)
       if (this.isTouch && Game.level && Game.level.usesAlt) {
         const rect = this.canvas.getBoundingClientRect();
-        key = (e.clientX - rect.left) < rect.width / 2 ? 'alt' : 'main';
+        if (document.body.classList.contains('force-landscape')) {
+          // 画面顺时针旋转 90°：用户看到的"左半屏"对应原始画布的下半部分
+          key = (e.clientY - rect.top) > rect.height / 2 ? 'alt' : 'main';
+        } else {
+          key = (e.clientX - rect.left) < rect.width / 2 ? 'alt' : 'main';
+        }
       }
       this.touchKeys.set(e.pointerId, key);
       Game.press(key);
@@ -111,7 +127,11 @@ const Main = {
   },
 
   fitCanvas() {
-    const scale = Math.min(window.innerWidth / 960, window.innerHeight / 540) * 0.96;
+    // 以 #app 的布局尺寸为准（强制横屏时 #app 宽高为 100vh/100vw）
+    const app = document.getElementById('app');
+    const w = app.clientWidth || window.innerWidth;
+    const h = app.clientHeight || window.innerHeight;
+    const scale = Math.min(w / 960, h / 540) * 0.96;
     this.canvas.style.width = (960 * scale) + 'px';
     this.canvas.style.height = (540 * scale) + 'px';
   },

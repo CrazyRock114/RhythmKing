@@ -106,7 +106,7 @@ h2 {
   -webkit-touch-callout: none;
 }
 
-/* 竖屏时提示旋转设备（仅小屏设备显示） */
+/* 竖屏时提示旋转设备（仅触屏小屏设备显示，可手动关闭） */
 #rotate-hint {
   display: none;
   position: fixed;
@@ -117,14 +117,32 @@ h2 {
   justify-content: center;
   flex-direction: column;
   color: #ffd94d;
-  font-size: 22px;
+  font-size: 20px;
   text-align: center;
   padding: 30px;
 }
-#rotate-hint .icon { font-size: 64px; margin-bottom: 18px; }
+#rotate-hint .icon { font-size: 64px; margin-bottom: 14px; }
+#rotate-hint p { margin-bottom: 20px; line-height: 1.6; }
 @media (orientation: portrait) and (max-width: 900px) {
-  #rotate-hint { display: flex; }
+  body.is-touch #rotate-hint { display: flex; }
 }
+/* 用户选择「竖屏继续」后隐藏提示 */
+body.allow-portrait #rotate-hint,
+body.force-landscape #rotate-hint { display: none !important; }
+
+/* 用户选择「强制横屏」：把游戏画面整体旋转 90°（任何浏览器都生效） */
+body.force-landscape #app {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center;
+}
+/* 旋转后分区提示标签贴到游戏视口两侧 */
+body.force-landscape #zone-left { left: 12px; top: 12px; bottom: auto; right: auto; }
+body.force-landscape #zone-right { left: 12px; bottom: 12px; right: auto; top: auto; }
 
 /* 双键关的触屏左右分区提示 */
 #zone-left, #zone-right {
